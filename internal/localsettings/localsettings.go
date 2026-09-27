@@ -1,0 +1,339 @@
+package localsettings
+
+import (
+	"bytes"
+	"errors"
+	"fmt"
+	"os"
+	"regexp"
+	"slices"
+	"strings"
+)
+
+type Loads struct {
+	Extensions, Skins []string
+}
+
+type Settings struct {
+	ExtensionDirectory, StyleDirectory, Server, ScriptPath, DefaultSkin string
+}
+
+const (
+	blockStart = "// >>> phuo (managed block, edit phuo.json instead)"
+	blockEnd   = "// <<< phuo"
+)
+
+var (
+	loadRe = regexp.MustCompile(
+		`wfLoad(Extension|Skin)s?\(\s*(?:\[\s*((?:['"][^'"]*['"]\s*,?\s*)+)\s*\]|array\s*\(\s*((?:['"][^'"]*['"]\s*,?\s*)+)\s*\)|((?:['"][^'"]*['"]\s*,?\s*)+))\s*\)`,
+	)
+	nameRe    = regexp.MustCompile(`['"]([^'"]+)['"]`)
+	settingRe = regexp.MustCompile(
+		`\$wg(ExtensionDirectory|StyleDirectory|Server|ScriptPath|DefaultSkin)\s*=\s*(?:'([^'$]*)'|"([^"$]*)")\s*;`,
+	)
+)
+
+type File struct {
+	Outside  Loads // active loads the user wrote; phuo never duplicates or touches them
+	InBlock  Loads
+	Disabled Loads // commented-out user loads; phuo treats them as deliberately off
+	Settings
+	Line map[string]int // key -> line of its user-written load (active, else commented)
+}
+
+func (l Loads) Has(key string) bool {
+	typ, name, _ := strings.Cut(key, "/")
+	if typ == "skins" {
+		return slices.Contains(l.Skins, name)
+	}
+	return slices.Contains(l.Extensions, name)
+}
+
+func (l Loads) Keys() []string {
+	keys := make([]string, 0, len(l.Extensions)+len(l.Skins))
+	for _, n := range l.Extensions {
+		keys = append(keys, "extensions/"+n)
+	}
+	for _, n := range l.Skins {
+		keys = append(keys, "skins/"+n)
+	}
+	return keys
+}
+
+func (l *Loads) Add(key string) {
+	typ, name, _ := strings.Cut(key, "/")
+	if typ == "skins" {
+		l.Skins = append(l.Skins, name)
+	} else {
+		l.Extensions = append(l.Extensions, name)
+	}
+}
+
+func Scan(path string) (File, error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return File{}, err
+	}
+	f, err := scan(b)
+	if err != nil {
+		return File{}, fmt.Errorf("%s: %w", path, err)
+	}
+	return f, nil
+}
+
+func scan(b []byte) (File, error) {
+	start, end, err := blockRange(b)
+	if err != nil {
+		return File{}, err
+	}
+	cm, err := comments(b)
+	if err != nil {
+		return File{}, err
+	}
+	inComment := func(p int) bool {
+		_, ok := slices.BinarySearchFunc(cm, p, func(r [2]int, p int) int {
+			switch {
+			case r[1] <= p:
+				return -1
+			case r[0] > p:
+				return 1
+			}
+			return 0
+		})
+		return ok
+	}
+	f := File{Line: map[string]int{}}
+	const (
+		disabled = 1 << iota
+		outside
+		inBlock
+	)
+	state := map[string]int{}
+	var order []string
+	for _, m := range loadRe.FindAllSubmatchIndex(b, -1) {
+		inside := start >= 0 && m[0] >= start && m[1] <= end
+		off := inComment(m[0])
+		if inside && off {
+			continue
+		}
+		bit := outside
+		switch {
+		case inside:
+			bit = inBlock
+		case off:
+			bit = disabled
+		}
+		typ := "extensions/"
+		if b[m[2]] == 'S' {
+			typ = "skins/"
+		}
+		var blob []byte
+		for _, i := range []int{4, 6, 8} {
+			if m[i] >= 0 {
+				blob = b[m[i]:m[i+1]]
+				break
+			}
+		}
+		for _, n := range nameRe.FindAllSubmatch(blob, -1) {
+			key := typ + string(n[1])
+			if state[key] == 0 {
+				order = append(order, key)
+			}
+			if bit != inBlock && state[key]&outside == 0 && (bit == outside || state[key]&disabled == 0) {
+				f.Line[key] = 1 + bytes.Count(b[:m[0]], []byte("\n"))
+			}
+			state[key] |= bit
+		}
+	}
+	for _, key := range order {
+		switch s := state[key]; {
+		case s&outside != 0:
+			f.Outside.Add(key)
+		case s&inBlock != 0:
+			f.InBlock.Add(key)
+		default:
+			f.Disabled.Add(key)
+		}
+	}
+	s := &f.Settings
+	for _, m := range settingRe.FindAllSubmatchIndex(b, -1) {
+		if inComment(m[0]) {
+			continue
+		}
+		v := m[4:6]
+		if v[0] < 0 {
+			v = m[6:8]
+		}
+		val := string(b[v[0]:v[1]])
+		switch string(b[m[2]:m[3]]) {
+		case "ExtensionDirectory":
+			s.ExtensionDirectory = val
+		case "StyleDirectory":
+			s.StyleDirectory = val
+		case "Server":
+			s.Server = val
+		case "ScriptPath":
+			s.ScriptPath = val
+		case "DefaultSkin":
+			s.DefaultSkin = val
+		}
+	}
+	return f, nil
+}
+
+func comments(b []byte) (r [][2]int, err error) {
+	lineEnd := func(i int) int {
+		if j := bytes.IndexByte(b[i:], '\n'); j >= 0 {
+			return i + j
+		}
+		return len(b)
+	}
+	for i := 0; i < len(b); i++ {
+		switch c := b[i]; {
+		case c == '\'' || c == '"':
+			for i++; i < len(b) && b[i] != c; i++ {
+				if b[i] == '\\' {
+					i++
+				}
+			}
+		// see https://php.watch/versions/8.0/attributes#syntax
+		case c == '#' && (i+1 == len(b) || b[i+1] != '['), c == '/' && i+1 < len(b) && b[i+1] == '/':
+			e := lineEnd(i)
+			r = append(r, [2]int{i, e})
+			i = e
+		case c == '/' && i+1 < len(b) && b[i+1] == '*':
+			j := bytes.Index(b[i+2:], []byte("*/"))
+			if j < 0 {
+				return nil, fmt.Errorf("unterminated /* comment on line %d", 1+bytes.Count(b[:i], []byte("\n")))
+			}
+			e := i + 2 + j + 2
+			r = append(r, [2]int{i, e})
+			i = e - 1
+		}
+	}
+	return r, nil
+}
+
+func Write(path string, want Loads) (changed bool, err error) {
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return false, err
+	}
+	out, err := render(b, want)
+	if err != nil {
+		return false, fmt.Errorf("%s: %w", path, err)
+	}
+	if bytes.Equal(out, b) {
+		return false, nil
+	}
+	if err := os.WriteFile(path, out, 0o644); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func render(b []byte, want Loads) ([]byte, error) {
+	crlf := bytes.Contains(b, []byte("\r\n"))
+	nl := "\n"
+	if crlf {
+		nl = "\r\n"
+	}
+	exts := slices.Clone(want.Extensions)
+	skins := slices.Clone(want.Skins)
+	slices.Sort(exts)
+	slices.Sort(skins)
+
+	var block string
+	if len(exts) > 0 || len(skins) > 0 {
+		var lines []string
+		lines = append(lines, blockStart)
+		if len(exts) > 0 {
+			lines = append(lines, "wfLoadExtensions( [ "+quoteList(exts)+" ] );")
+		}
+		if len(skins) > 0 {
+			lines = append(lines, "wfLoadSkins( [ "+quoteList(skins)+" ] );")
+		}
+		lines = append(lines, blockEnd)
+		block = strings.Join(lines, nl) + nl
+	}
+
+	start, end, err := blockRange(b)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := comments(b); err != nil {
+		return nil, err
+	}
+	switch {
+	case start < 0 && block == "":
+		return b, nil
+	case start < 0:
+		out := slices.Clone(b)
+		// a trailing lone '\r' counts as a line end
+		// appending '\n' would turn it into CRLF and flip crlf next run
+		if len(out) > 0 && out[len(out)-1] != '\n' && out[len(out)-1] != '\r' {
+			out = append(out, nl...)
+		}
+		return append(out, block...), nil
+	case block == "":
+		return removeBlock(b, start, end, crlf), nil
+	}
+	return slices.Concat(b[:start], []byte(block), b[end:]), nil
+}
+
+func quoteList(names []string) string {
+	parts := make([]string, len(names))
+	for i, n := range names {
+		parts[i] = "'" + n + "'"
+	}
+	return strings.Join(parts, ", ")
+}
+
+// a half-deleted or duplicated block is an error
+// guessing its extent could swallow the user's own settings
+func blockRange(b []byte) (start, end int, err error) {
+	start = bytes.Index(b, []byte(blockStart))
+	if start < 0 {
+		return -1, -1, nil
+	}
+	rel := bytes.Index(b[start:], []byte(blockEnd))
+	if rel < 0 {
+		return 0, 0, errors.New("phuo block has no closing " + blockEnd + " line")
+	}
+	end = start + rel + len(blockEnd)
+	if bytes.Contains(b[start+len(blockStart):], []byte(blockStart)) {
+		return 0, 0, errors.New("more than one phuo block")
+	}
+	if end < len(b) && b[end] == '\r' {
+		end++
+	}
+	if end < len(b) && b[end] == '\n' {
+		end++
+	}
+	return start, end, nil
+}
+
+func removeBlock(b []byte, start, end int, crlf bool) []byte {
+	// eat one surrounding blank line so removal doesn't leave a double gap
+	from, to := start, end
+	if from > 0 && (b[from-1] == '\n' || b[from-1] == '\r') {
+		from--
+		if from > 0 && b[from] == '\n' && b[from-1] == '\r' {
+			from--
+		}
+	}
+	out := append([]byte(nil), b[:from]...)
+	rest := b[to:]
+	if len(out) > 0 && len(rest) > 0 {
+		if crlf {
+			out = append(out, '\r', '\n')
+		} else {
+			out = append(out, '\n')
+		}
+		for len(rest) > 0 && (rest[0] == '\n' || rest[0] == '\r') {
+			rest = rest[1:]
+		}
+	}
+	out = append(out, rest...)
+	return out
+}
