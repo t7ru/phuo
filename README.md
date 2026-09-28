@@ -1,8 +1,13 @@
+<div align="center">
+<img alt="phuo wordmark" width="400" src="./wordmark.png">
+
 # phuo
 
 **phuo** (φύω), a dead simple MediaWiki extension and skin manager.
 
 <img alt="A demo of phuo" width="800" src="./demo.gif/">
+
+</div>
 
 ## Why?
 
