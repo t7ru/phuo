@@ -48,6 +48,7 @@ type CLI struct {
 	Changelog   ChangelogCmd   `cmd:"" aliases:"log" help:"Show commits between refs."`
 	Doctor      DoctorCmd      `cmd:"" help:"Run health checks on the install."`
 	Cache       CacheCmd       `cmd:"" help:"Show or clear the global cache."`
+	Upgrade     UpgradeCmd     `cmd:"" help:"Update this phuo binary."`
 	Completions CompletionsCmd `cmd:"" help:"Print shell completion scripts."`
 	Pm          PmCmd          `cmd:"" help:"Package-manager aliases (ls, cache, diff)."`
 }
