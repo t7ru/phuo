@@ -42,6 +42,22 @@ func (c *DoctorCmd) Run(ctx context.Context, cli *CLI) error {
 		return err == nil
 	}
 
+	plat, platOK := mw.Platform{}, false
+	if !p.Manifest.PHP.Disabled() {
+		bin, _ := p.Manifest.PHP.Value("php")
+		php := mw.PHP{Bin: bin, Root: p.Root}
+		if php.Available() {
+			plat, err = php.Platform(ctx)
+			if err != nil {
+				rep.Warn("php: %s", firstLine(err.Error()))
+			} else {
+				platOK = true
+			}
+		} else {
+			rep.Warn("php not found; platform requirements not checked")
+		}
+	}
+
 	for key := range p.Lock.Packages {
 		dir := packageDir(p, key)
 		man, _, err := manifest.Read(dir)
@@ -64,6 +80,11 @@ func (c *DoctorCmd) Run(ctx context.Context, cli *CLI) error {
 		for name := range man.Requires.Skins {
 			if !dirInstalled("skins", name) {
 				problem("%s: requires skins/%s (not installed)", key, name)
+			}
+		}
+		if platOK {
+			for _, msg := range man.UnmetPlatform(plat.PHP, plat.Modules, plat.Abilities) {
+				problem("%s: %s", key, msg)
 			}
 		}
 	}

@@ -90,6 +90,31 @@ func (p PHP) Available() bool {
 	return err == nil
 }
 
+type Platform struct {
+	PHP       string
+	Modules   []string
+	Abilities map[string]bool
+}
+
+// shell mirrors MediaWiki\Shell\Shell::isDisabled()
+const platformProbe = `echo json_encode(["php" => PHP_VERSION, "modules" => get_loaded_extensions(), "shell" => function_exists("proc_open")]);`
+
+func (p PHP) Platform(ctx context.Context) (Platform, error) {
+	stdout, stderr, err := p.run(ctx, nil, nil, "-r", platformProbe)
+	if err != nil {
+		return Platform{}, phpErr(err, stderr)
+	}
+	var raw struct {
+		PHP     string   `json:"php"`
+		Modules []string `json:"modules"`
+		Shell   bool     `json:"shell"`
+	}
+	if err := json.Unmarshal(stdout, &raw); err != nil {
+		return Platform{}, err
+	}
+	return Platform{PHP: raw.PHP, Modules: raw.Modules, Abilities: map[string]bool{"shell": raw.Shell}}, nil
+}
+
 const registryEval = `echo json_encode(\MediaWiki\Registration\ExtensionRegistry::getInstance()->getAllThings());`
 
 func (p PHP) Registry(ctx context.Context) ([]Loaded, error) {

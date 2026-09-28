@@ -1212,6 +1212,7 @@ func (pl *Plan) finishMW(ctx context.Context, reporter *ui.Reporter, cplan compo
 			return err
 		}
 	}
+	pl.platformWarn(ctx, reporter, done)
 	if err := pl.runComposer(ctx, reporter, cplan); err != nil {
 		return err
 	}
@@ -1406,6 +1407,33 @@ func lastLine(s string) string {
 		return strings.TrimSpace(s[i+1:])
 	}
 	return s
+}
+
+func (pl *Plan) platformWarn(ctx context.Context, reporter *ui.Reporter, done []*workItem) {
+	var fresh []*workItem
+	for _, it := range done {
+		if !it.keep && len(it.man.Requires.Platform) > 0 {
+			fresh = append(fresh, it)
+		}
+	}
+	if len(fresh) == 0 || pl.p.Manifest.PHP.Disabled() {
+		return
+	}
+	bin, _ := pl.p.Manifest.PHP.Value("php")
+	php := mw.PHP{Bin: bin, Root: pl.p.Root}
+	if !php.Available() {
+		return
+	}
+	plat, err := php.Platform(ctx)
+	if err != nil {
+		reporter.Warn("php: %v", err)
+		return
+	}
+	for _, it := range fresh {
+		for _, msg := range it.man.UnmetPlatform(plat.PHP, plat.Modules, plat.Abilities) {
+			reporter.Warn("%s: %s", it.key, msg)
+		}
+	}
 }
 
 func (pl *Plan) schemaPrompt(ctx context.Context, reporter *ui.Reporter, keys []string) {
