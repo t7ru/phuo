@@ -23,6 +23,8 @@ phuo requires [Go 1.27](https://go.dev/doc/install) or later.
 go install github.com/t7ru/phuo@latest
 ```
 
+You can also get a prebuilt binary from the [releases page](https://github.com/t7ru/phuo/releases).
+
 From your MediaWiki root:
 
 ```bash
@@ -81,6 +83,7 @@ phuo changelog Echo                    # commits between the installed ref and t
 phuo doctor                            # check the install
 phuo cache                             # print the cache directory and size
 phuo cache rm                          # delete it
+phuo upgrade                           # update this phuo install
 phuo completions bash                  # bash, zsh, fish, or powershell
 phuo pm ls                             # ls, cache, and diff under a pm prefix
 ```
