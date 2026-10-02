@@ -19,10 +19,11 @@ const (
 )
 
 type Spec struct {
-	Name string // install dir name; empty for registry ref-only values
+	Name string // install dir and is empty for a ref-only value
 	Kind Kind
 	Repo string
 	Ref  string
+	SHA  string // registry #sha after the ref
 	Skin bool
 }
 
@@ -43,7 +44,7 @@ func Parse(s string) (Spec, error) {
 		p.Skin = p.Skin || skin
 		s = norm
 	}
-	// "Alias@<source>" — but not "git@host:..." and not a credentialed URL ("https://u:p@host")
+	// "Alias@<source>" but not "git@host:..." and not a credentialed URL ("https://u:p@host")
 	if !strings.HasPrefix(s, "git@") && !strings.Contains(s, "://") {
 		if name, src, ok := strings.Cut(s, "@"); ok && nameRe.MatchString(name) {
 			p.Name, s = name, src
@@ -51,8 +52,18 @@ func Parse(s string) (Spec, error) {
 	}
 	s, p.Ref, _ = strings.Cut(s, "#")
 	switch {
-	case s == "" || s == "*":
+	case s == "" || s == "*" || nameRe.MatchString(s):
 		p.Kind = Registry
+		if isPinSHA(p.Ref) {
+			p.SHA, p.Ref = p.Ref, ""
+		}
+		// bare REL*/master/main are refs
+		// hit yourself if you think they're package names
+		if s != "" && s != "*" && (p.Name != "" || refOnlyRe.MatchString(s)) {
+			p.Ref = s
+		} else if s != "" && s != "*" {
+			p.Name = s
+		}
 	case strings.HasPrefix(s, "github:"):
 		p.Kind, p.Repo = GitHub, s[7:]
 	case strings.HasPrefix(s, "gitlab:"):
@@ -63,15 +74,6 @@ func Parse(s string) (Spec, error) {
 		p.Kind, p.Repo = Local, s[5:]
 	case strings.Contains(s, "://"):
 		p.Kind, p.Repo = Archive, s
-	case nameRe.MatchString(s) && p.Name == "":
-		// bare REL*/master/main are phuo.json ref values
-		if refOnlyRe.MatchString(s) {
-			p.Kind, p.Ref = Registry, s
-		} else {
-			p.Kind, p.Name = Registry, s
-		}
-	case nameRe.MatchString(s):
-		p.Kind, p.Ref = Registry, s
 	default:
 		return p, fmt.Errorf("unrecognised spec %q", s)
 	}
@@ -102,16 +104,21 @@ func (s Spec) String() string {
 func (s Spec) body() string {
 	switch s.Kind {
 	case Registry:
+		var base string
 		switch {
 		case s.Name != "" && s.Ref != "":
-			return s.Name + "@" + s.Ref
+			base = s.Name + "@" + s.Ref
 		case s.Name != "":
-			return s.Name
+			base = s.Name
 		case s.Ref != "":
-			return s.Ref
+			base = s.Ref
 		default:
-			return "*"
+			base = "*"
 		}
+		if s.SHA != "" {
+			return base + "#" + s.SHA
+		}
+		return base
 	case GitHub:
 		return s.alias("github:" + s.Repo)
 	case GitLab:
@@ -137,8 +144,7 @@ func (s Spec) alias(src string) string {
 	return src
 }
 
-// Extension:Foo, Skin:Foo, and mediawiki.org page URLs are registry names.
-// wiki is true for a mediawiki.org URL even when the title is not a package.
+// wiki stays set when a mediawiki.org URL is not a package name
 func normalizeMediaWiki(s string) (norm string, skin, ok, wiki bool) {
 	raw := s
 	if strings.Contains(s, "://") {
@@ -170,6 +176,19 @@ func normalizeMediaWiki(s string) (norm string, skin, ok, wiki bool) {
 		return "", false, false, wiki
 	}
 	return raw, skin, true, wiki
+}
+
+func isPinSHA(s string) bool {
+	if len(s) < 7 || len(s) > 40 {
+		return false
+	}
+	for _, c := range s {
+		if c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F' {
+			continue
+		}
+		return false
+	}
+	return true
 }
 
 func deriveName(repo string) string {

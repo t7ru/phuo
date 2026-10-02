@@ -184,6 +184,14 @@ func (r *resolver) resolveRegistry(ctx context.Context, s spec.Spec, opts Resolv
 	}
 	archive := br.Refs[ref]
 	sha := cmp.Or(shas[ref], ArchiveSHA(archive))
+	if s.SHA != "" {
+		sha = s.SHA
+		if alt, ok := ArchiveAt(br.Source, sha); ok {
+			archive = alt
+		} else if !opts.Git {
+			return Resolved{}, fmt.Errorf("%s: no archive for %s", name, sha)
+		}
+	}
 
 	out := Resolved{
 		Name: name, Type: typ, Spec: s,
@@ -194,7 +202,11 @@ func (r *resolver) resolveRegistry(ctx context.Context, s spec.Spec, opts Resolv
 	if opts.Git {
 		out.Clone = br.Source
 		out.Archive = ""
-		_, sha, err = r.resolveHostRef(ctx, br.Source, ref)
+		want := ref
+		if s.SHA != "" {
+			want = s.SHA
+		}
+		_, sha, err = r.resolveHostRef(ctx, br.Source, want)
 		if err != nil {
 			return Resolved{}, err
 		}
@@ -202,7 +214,9 @@ func (r *resolver) resolveRegistry(ctx context.Context, s spec.Spec, opts Resolv
 		return out, nil
 	}
 
-	if sha != "" && strings.Contains(br.Source, "gerrit.wikimedia.org") {
+	// a full pin is already the commit id
+	// the date lookup would be a request per package on every update
+	if sha != "" && !IsFullSHA(s.SHA) && strings.Contains(br.Source, "gerrit.wikimedia.org") {
 		full, date, err := r.gitilesCommit(ctx, br.Source, sha)
 		if err != nil {
 			return Resolved{}, err

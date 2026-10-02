@@ -35,6 +35,8 @@ type CLI struct {
 	Disable     DisableCmd     `cmd:"" help:"Keep installed packages out of LocalSettings.php."`
 	Install     InstallCmd     `cmd:"" aliases:"i" help:"Install from phuo.lock."`
 	Update      UpdateCmd      `cmd:"" aliases:"up" help:"Update packages to newest refs."`
+	Pin         PinCmd         `cmd:"" help:"Pin installed packages at their current sha."`
+	Unpin       UnpinCmd       `cmd:"" help:"Unpin installed packages."`
 	Revert      RevertCmd      `cmd:"" help:"Undo the last project change from the local snapshot."`
 	Prune       PruneCmd       `cmd:"" help:"Remove directories not in the lock."`
 	Patch       PatchCmd       `cmd:"" help:"Manage local patches for a package."`

@@ -249,11 +249,7 @@ func (pl *Plan) applyInstall(ctx context.Context, reporter *ui.Reporter) (Summar
 	for _, s := range pl.add {
 		it := &workItem{spec: s, direct: true}
 		if s.Kind == spec.Registry {
-			if s.Ref == "" {
-				it.lockSpec = "*"
-			} else {
-				it.lockSpec = s.Ref
-			}
+			it.lockSpec = registrySpec(s)
 		} else {
 			it.lockSpec = stripAlias(s)
 		}
@@ -666,11 +662,7 @@ func (pl *Plan) prepareItem(ctx context.Context, it *workItem, resolver source.R
 
 	if it.direct {
 		if res.Spec.Kind == spec.Registry {
-			if it.spec.Ref == "" {
-				it.lockSpec = "*"
-			} else {
-				it.lockSpec = it.spec.Ref
-			}
+			it.lockSpec = registrySpec(it.spec)
 		} else {
 			it.lockSpec = stripAlias(it.spec)
 		}
@@ -882,7 +874,11 @@ func gitClone(ctx context.Context, res source.Resolved, dest string, full bool) 
 	env := append(os.Environ(), fetch.GitEnv(res.Clone)...)
 	// `--branch` is names only
 	// an exact sha needs fetch + checkout
-	if source.IsFullSHA(res.Ref) {
+	ref := res.Ref
+	if res.Spec.SHA != "" && source.IsFullSHA(res.SHA) {
+		ref = res.SHA
+	}
+	if source.IsFullSHA(ref) {
 		if err := os.MkdirAll(dest, 0o755); err != nil {
 			return err
 		}
@@ -893,9 +889,9 @@ func gitClone(ctx context.Context, res source.Resolved, dest string, full bool) 
 		if full {
 			steps = append(steps, []string{"fetch", "--quiet", "origin"})
 		} else {
-			steps = append(steps, []string{"fetch", "--quiet", "--depth", "1", "origin", res.Ref})
+			steps = append(steps, []string{"fetch", "--quiet", "--depth", "1", "origin", ref})
 		}
-		steps = append(steps, []string{"checkout", "--quiet", res.Ref})
+		steps = append(steps, []string{"checkout", "--quiet", ref})
 		for _, args := range steps {
 			cmd := exec.CommandContext(ctx, "git", args...)
 			cmd.Dir = dest
@@ -911,8 +907,8 @@ func gitClone(ctx context.Context, res source.Resolved, dest string, full bool) 
 	if !full {
 		args = append(args, "--depth", "1", "--single-branch")
 	}
-	if res.Ref != "" {
-		args = append(args, "--branch", res.Ref)
+	if ref != "" {
+		args = append(args, "--branch", ref)
 	}
 	args = append(args, res.Clone, dest)
 	cmd := exec.CommandContext(ctx, "git", args...)
@@ -1528,6 +1524,11 @@ func stripAlias(s spec.Spec) string {
 		}
 	}
 	return str
+}
+
+func registrySpec(s spec.Spec) string {
+	s.Name, s.Skin = "", false
+	return s.String()
 }
 
 func exactValue(it *workItem) string {
