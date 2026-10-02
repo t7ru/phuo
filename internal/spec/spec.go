@@ -2,6 +2,7 @@ package spec
 
 import (
 	"fmt"
+	"net/url"
 	"regexp"
 	"strings"
 )
@@ -34,6 +35,13 @@ func Parse(s string) (Spec, error) {
 	var p Spec
 	if rest, ok := strings.CutPrefix(s, "skin:"); ok {
 		p.Skin, s = true, rest
+	}
+	if norm, skin, ok, wiki := normalizeMediaWiki(s); ok || wiki {
+		if !ok {
+			return p, fmt.Errorf("unrecognised spec %q", s)
+		}
+		p.Skin = p.Skin || skin
+		s = norm
 	}
 	// "Alias@<source>" — but not "git@host:..." and not a credentialed URL ("https://u:p@host")
 	if !strings.HasPrefix(s, "git@") && !strings.Contains(s, "://") {
@@ -127,6 +135,41 @@ func (s Spec) alias(src string) string {
 		return s.Name + "@" + src
 	}
 	return src
+}
+
+// Extension:Foo, Skin:Foo, and mediawiki.org page URLs are registry names.
+// wiki is true for a mediawiki.org URL even when the title is not a package.
+func normalizeMediaWiki(s string) (norm string, skin, ok, wiki bool) {
+	raw := s
+	if strings.Contains(s, "://") {
+		u, err := url.Parse(s)
+		if err != nil || !strings.EqualFold(strings.TrimPrefix(u.Hostname(), "www."), "mediawiki.org") {
+			return "", false, false, false
+		}
+		wiki = true
+		raw = strings.Trim(strings.TrimPrefix(u.EscapedPath(), "/wiki/"), "/")
+		if title := u.Query().Get("title"); title != "" && strings.HasSuffix(u.Path, "/index.php") {
+			raw = title
+		}
+		if decoded, err := url.PathUnescape(raw); err == nil {
+			raw = decoded
+		}
+	}
+	switch {
+	case len(raw) > len("Extension:") && strings.EqualFold(raw[:len("Extension:")], "Extension:"):
+		raw = raw[len("Extension:"):]
+	case len(raw) > len("Skin:") && strings.EqualFold(raw[:len("Skin:")], "Skin:"):
+		raw = raw[len("Skin:"):]
+		skin = true
+	default:
+		return "", false, false, wiki
+	}
+	name, _, _ := strings.Cut(raw, "@")
+	name, _, _ = strings.Cut(name, "#")
+	if !nameRe.MatchString(name) {
+		return "", false, false, wiki
+	}
+	return raw, skin, true, wiki
 }
 
 func deriveName(repo string) string {
