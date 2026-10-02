@@ -1446,6 +1446,10 @@ func (pl *Plan) schemaPrompt(ctx context.Context, reporter *ui.Reporter, keys []
 	if len(need) == 0 {
 		return
 	}
+	if pl.opts.Revert {
+		reporter.Warn("%s: database schema not reverted", strings.Join(need, ", "))
+		return
+	}
 	hint := fmt.Sprintf("%s may change the database schema; run: php maintenance/run.php update --quick (or pass --update-db)", strings.Join(need, ", "))
 	phpBin, phpOK := pl.p.Manifest.PHP.Value("php")
 	p := mw.PHP{Bin: phpBin, Root: pl.p.Root}
