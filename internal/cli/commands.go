@@ -79,7 +79,7 @@ func (c *AddCmd) Run(ctx context.Context, cli *CLI) error {
 }
 
 type RemoveCmd struct {
-	Names      []string `arg:"" optional:"" name:"name" help:"Packages to remove; omit to pick."`
+	Names      []string `arg:"" optional:"" name:"name" predictor:"installed" help:"Packages to remove; omit to pick."`
 	NoComposer bool     `name:"no-composer" help:"Skip running composer."`
 	NoLoad     bool     `name:"no-load" help:"Skip LocalSettings.php edits."`
 	Force      bool     `name:"force" short:"f" help:"Remove even if required by others."`
@@ -116,7 +116,7 @@ func (c *RemoveCmd) Run(ctx context.Context, cli *CLI) error {
 }
 
 type EnableCmd struct {
-	Names []string `arg:"" optional:"" name:"name" help:"Packages to enable (their requirements come along); omit to pick."`
+	Names []string `arg:"" optional:"" name:"name" predictor:"installed" help:"Packages to enable (their requirements come along); omit to pick."`
 }
 
 func (c *EnableCmd) Run(ctx context.Context, cli *CLI) error {
@@ -124,7 +124,7 @@ func (c *EnableCmd) Run(ctx context.Context, cli *CLI) error {
 }
 
 type DisableCmd struct {
-	Names []string `arg:"" optional:"" name:"name" help:"Packages to disable; omit to pick."`
+	Names []string `arg:"" optional:"" name:"name" predictor:"installed" help:"Packages to disable; omit to pick."`
 }
 
 func (c *DisableCmd) Run(ctx context.Context, cli *CLI) error {
@@ -204,7 +204,7 @@ func loadProject(ctx context.Context, cli *CLI) (*project.Project, *ui.Reporter,
 }
 
 type UpdateCmd struct {
-	Names       []string `arg:"" optional:"" name:"name" help:"Names or patterns to update."`
+	Names       []string `arg:"" optional:"" name:"name" predictor:"installed" help:"Names or patterns to update."`
 	Interactive bool     `name:"interactive" short:"i" help:"Interactive multi-select."`
 	DryRun      bool     `name:"dry-run" help:"Plan only; write nothing."`
 	Latest      bool     `name:"latest" help:"Move REL pins up to the derived rel."`
@@ -352,14 +352,14 @@ func (c *PruneCmd) Run(ctx context.Context, cli *CLI) error {
 }
 
 type PatchCmd struct {
-	Name       string `arg:"" optional:"" name:"name" help:"Package to patch."`
+	Name       string `arg:"" optional:"" name:"name" predictor:"installed" help:"Package to patch."`
 	Commit     bool   `name:"commit" help:"Write the patch file from local edits."`
 	Remove     bool   `name:"remove" help:"Remove the patch and reinstall."`
 	PatchesDir string `name:"patches-dir" default:"patches" help:"Directory for patch files."`
 }
 
 type DiffCmd struct {
-	Name     string `arg:"" name:"name" help:"Package to diff."`
+	Name     string `arg:"" name:"name" predictor:"installed" help:"Package to diff."`
 	Stat     bool   `name:"stat" help:"Show diffstat."`
 	NameOnly bool   `name:"name-only" help:"List changed paths only."`
 	All      bool   `name:"all" help:"Include vendor/i18n/stamp files."`

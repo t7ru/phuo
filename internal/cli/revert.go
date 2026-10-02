@@ -14,7 +14,7 @@ import (
 )
 
 type RevertCmd struct {
-	Name        string `arg:"" optional:"" name:"name" help:"Package to revert; omit to revert phuo.json and phuo.lock."`
+	Name        string `arg:"" optional:"" name:"name" predictor:"installed" help:"Package to revert; omit to revert phuo.json and phuo.lock."`
 	Interactive bool   `name:"interactive" short:"i" help:"Pick the packages to revert."`
 	DryRun      bool   `name:"dry-run" help:"Plan only; write nothing."`
 }

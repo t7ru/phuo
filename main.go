@@ -9,7 +9,6 @@ import (
 	"syscall"
 
 	"github.com/alecthomas/kong"
-	"github.com/willabides/kongplete"
 
 	"github.com/t7ru/phuo/internal/cli"
 	"github.com/t7ru/phuo/internal/version"
@@ -36,7 +35,7 @@ func run() int {
 		return 2
 	}
 	k.Exit = func(code int) { os.Exit(code) }
-	kongplete.Complete(k)
+	cli.Complete(k)
 
 	ctxK, err := k.Parse(os.Args[1:])
 	if err != nil {

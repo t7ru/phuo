@@ -71,7 +71,7 @@ func (c *LicensesCmd) Run(ctx context.Context, cli *CLI) error {
 }
 
 type OutdatedCmd struct {
-	Patterns []string `arg:"" optional:"" name:"pattern" help:"Glob patterns; ! negates."`
+	Patterns []string `arg:"" optional:"" name:"pattern" predictor:"installed" help:"Glob patterns; ! negates."`
 	L10n     bool     `name:"l10n" help:"Include packages whose only new commits are translations."`
 }
 
@@ -557,7 +557,7 @@ func (c *SearchCmd) Run(ctx context.Context, cli *CLI) error {
 }
 
 type WhyCmd struct {
-	Name string `arg:"" name:"name" help:"Package name."`
+	Name string `arg:"" name:"name" predictor:"installed" help:"Package name."`
 }
 
 func (c *WhyCmd) Run(ctx context.Context, cli *CLI) error {
@@ -596,7 +596,7 @@ func (c *WhyCmd) Run(ctx context.Context, cli *CLI) error {
 }
 
 type ChangelogCmd struct {
-	Name string `arg:"" name:"name" help:"Package name."`
+	Name string `arg:"" name:"name" predictor:"installed" help:"Package name."`
 	All  bool   `name:"all" help:"Include l10n-bot commits."`
 	From string `name:"from" help:"From ref/sha."`
 	To   string `name:"to" help:"To ref/sha."`
