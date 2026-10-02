@@ -208,6 +208,7 @@ type UpdateCmd struct {
 	Interactive bool     `name:"interactive" short:"i" help:"Interactive multi-select."`
 	DryRun      bool     `name:"dry-run" help:"Plan only; write nothing."`
 	Latest      bool     `name:"latest" help:"Move REL pins up to the derived rel."`
+	L10n        bool     `name:"l10n" help:"Include packages whose only new commits are translations."`
 }
 
 func (c *UpdateCmd) Run(ctx context.Context, cli *CLI) error {
@@ -224,6 +225,7 @@ func (c *UpdateCmd) Run(ctx context.Context, cli *CLI) error {
 		rows = slices.DeleteFunc(rows, func(r outdatedRow) bool {
 			return r.CurrentSHA == r.TargetSHA && !strings.Contains(r.Flag, "rel")
 		})
+		rows = withoutL10n(rows, c.L10n)
 		keys, latest, err := pickOutdated(cli, rows, p.Rel)
 		if err != nil {
 			return err
@@ -251,7 +253,7 @@ func (c *UpdateCmd) Run(ctx context.Context, cli *CLI) error {
 		}
 	}
 	pl, err := installer.NewPlan(p, specs, nil, installer.Options{
-		DryRun: c.DryRun, Update: true,
+		DryRun: c.DryRun, Update: true, L10n: c.L10n,
 		NoCache: cli.NoCache, Offline: cli.Offline,
 		Ask: asker(cli),
 	})

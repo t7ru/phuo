@@ -15,6 +15,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -518,6 +519,41 @@ func (r *resolver) Log(ctx context.Context, res Resolved, from, to string) ([]Co
 		return gitLog(ctx, res, from, to)
 	default:
 		return nil, fmt.Errorf("%s: no changelog source", res.Name)
+	}
+}
+
+const L10nBot = "l10n-bot@translatewiki.net"
+
+// empty is unknown, not translation-only
+func L10nOnly(commits []Commit) bool {
+	if len(commits) == 0 {
+		return false
+	}
+	for i := range commits {
+		if commits[i].Email != L10nBot {
+			return false
+		}
+	}
+	return true
+}
+
+// non-l10n count, or "l10n" when every commit is the bot
+func Behind(commits []Commit) (string, bool) {
+	n := 0
+	for i := range commits {
+		if commits[i].Email != L10nBot {
+			n++
+		}
+	}
+	switch {
+	case n > 100:
+		return "100+", false
+	case n > 0:
+		return strconv.Itoa(n), false
+	case len(commits) > 0:
+		return "l10n", true
+	default:
+		return "", false
 	}
 }
 

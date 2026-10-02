@@ -58,6 +58,7 @@ type Options struct {
 	Full         bool
 	Update       bool
 	UpdateDB     bool
+	L10n         bool // update translation-only tips too
 	Revert       bool
 	NoCache      bool
 	Offline      bool
@@ -680,6 +681,17 @@ func (pl *Plan) prepareItem(ctx context.Context, it *workItem, resolver source.R
 	if pl.opts.Update && haveLock && lp.SHA != "" && lp.SHA == res.SHA && !pl.opts.Force {
 		it.keep = true
 		return nil
+	}
+	// translation-only tips are not an update unless --l10n
+	// a failed or missing log stays an update
+	if pl.opts.Update && !pl.opts.L10n && haveLock && lp.SHA != "" && lp.SHA != res.SHA && source.CheapLog(res) {
+		if logger, ok := resolver.(source.ChangeLogger); ok {
+			commits, err := logger.Log(ctx, res, lp.SHA, res.SHA)
+			if err == nil && source.L10nOnly(commits) {
+				it.keep = true
+				return nil
+			}
+		}
 	}
 
 	if res.Local != "" {

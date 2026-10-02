@@ -72,6 +72,7 @@ func (c *LicensesCmd) Run(ctx context.Context, cli *CLI) error {
 
 type OutdatedCmd struct {
 	Patterns []string `arg:"" optional:"" name:"pattern" help:"Glob patterns; ! negates."`
+	L10n     bool     `name:"l10n" help:"Include packages whose only new commits are translations."`
 }
 
 type outdatedRow struct {
@@ -84,6 +85,7 @@ type outdatedRow struct {
 	Key        string `json:"-"`
 	CurrentSHA string `json:"-"`
 	TargetSHA  string `json:"-"`
+	L10nOnly   bool   `json:"-"`
 }
 
 func (c *OutdatedCmd) Run(ctx context.Context, cli *CLI) error {
@@ -96,6 +98,7 @@ func (c *OutdatedCmd) Run(ctx context.Context, cli *CLI) error {
 		return err
 	}
 	rows = slices.DeleteFunc(rows, func(r outdatedRow) bool { return r.Flag == "" && r.CurrentSHA == r.TargetSHA })
+	rows = withoutL10n(rows, c.L10n)
 	if cli.JSON {
 		return json.MarshalWrite(os.Stdout, rows)
 	}
@@ -217,17 +220,7 @@ func collectOutdated(ctx context.Context, cli *CLI, p *project.Project, patterns
 				}
 				return nil
 			}
-			n := 0
-			for _, cmt := range commits {
-				if cmt.Email != "l10n-bot@translatewiki.net" {
-					n++
-				}
-			}
-			if n > 100 {
-				row.Behind = "100+"
-			} else if n > 0 {
-				row.Behind = strconv.Itoa(n)
-			}
+			row.Behind, row.L10nOnly = source.Behind(commits)
 			return nil
 		})
 	}
@@ -649,7 +642,7 @@ func (c *ChangelogCmd) Run(ctx context.Context, cli *CLI) error {
 		return err
 	}
 	for _, cmt := range commits {
-		if !c.All && cmt.Email == "l10n-bot@translatewiki.net" {
+		if !c.All && cmt.Email == source.L10nBot {
 			continue
 		}
 		rep.Info("%s", cmt.Subject)
@@ -796,6 +789,15 @@ func nameMatches(name string, patterns []string) bool {
 		}
 	}
 	return true
+}
+
+func withoutL10n(rows []outdatedRow, include bool) []outdatedRow {
+	if include {
+		return rows
+	}
+	return slices.DeleteFunc(rows, func(r outdatedRow) bool {
+		return r.L10nOnly && r.Flag == ""
+	})
 }
 
 func relOlderThan(ref, cur string) bool {
