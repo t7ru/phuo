@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strconv"
 
 	"github.com/charmbracelet/huh"
 
@@ -14,9 +15,25 @@ import (
 )
 
 type RevertCmd struct {
-	Name        string `arg:"" optional:"" name:"name" predictor:"installed" help:"Package to revert; omit to revert phuo.json and phuo.lock."`
-	Interactive bool   `name:"interactive" short:"i" help:"Pick the packages to revert."`
+	Name        string `arg:"" optional:"" name:"name" predictor:"installed" help:"Package to revert, or a snapshot index. Omit to revert the previous phuo.json and phuo.lock."`
+	Interactive bool   `name:"interactive" short:"i" help:"Pick the packages to revert. Lists snapshots when more than one is kept."`
 	DryRun      bool   `name:"dry-run" help:"Plan only; write nothing."`
+}
+
+// a bare number is a snapshot index
+// extensions/2 still names a package
+func (c *RevertCmd) slot() (n int, name string, indexed bool, err error) {
+	if c.Name == "" {
+		return 1, "", false, nil
+	}
+	i, nerr := strconv.Atoi(c.Name)
+	if nerr != nil {
+		return 1, c.Name, false, nil
+	}
+	if i < 1 {
+		return 0, "", true, userErr("revert: snapshot index starts at 1")
+	}
+	return i, "", true, nil
 }
 
 // init-adopted entries (thus no sha or archive) record nothing to go back to
@@ -29,12 +46,25 @@ func (c *RevertCmd) Run(ctx context.Context, cli *CLI) error {
 	if err != nil {
 		return err
 	}
-	m, l, ok, err := p.Previous(1)
+	n, name, indexed, err := c.slot()
+	if err != nil {
+		return err
+	}
+	if c.Interactive && !indexed && p.Manifest.SnapshotCount() > 1 {
+		if err := requireTTY(cli, "revert -i"); err != nil {
+			return err
+		}
+		n, err = pickSnapshot(p)
+		if err != nil || n == 0 {
+			return err
+		}
+	}
+	m, l, ok, err := p.Previous(n)
 	if err != nil {
 		return err
 	}
 	if !ok {
-		return userErr(`revert: no snapshot yet (one is taken before each project write; "snapshots" in phuo.json sets how many are kept)`)
+		return noSnapshot(n)
 	}
 
 	var specs []spec.Spec
@@ -69,7 +99,7 @@ func (c *RevertCmd) Run(ctx context.Context, cli *CLI) error {
 			}
 			specs = append(specs, sp)
 		}
-	case c.Name == "":
+	case name == "":
 		m.Snapshots = p.Manifest.Snapshots // the knob itself isn't history
 		// extras added since the snapshot have to go too
 		// like `remove`, this runs before the restore and must not write state
@@ -103,18 +133,22 @@ func (c *RevertCmd) Run(ctx context.Context, cli *CLI) error {
 		if err != nil {
 			return err
 		}
-		rep.Info("reverting phuo.json and phuo.lock (%d packages)", len(p.Lock.Packages))
+		if n == 1 {
+			rep.Info("reverting phuo.json and phuo.lock (%d packages)", len(p.Lock.Packages))
+		} else {
+			rep.Info("reverting snapshot %d (%d packages)", n, len(p.Lock.Packages))
+		}
 	default:
-		key, err := resolveInstalledKey(p, c.Name)
+		key, err := resolveInstalledKey(p, name)
 		if err != nil {
 			return err
 		}
 		lp, ok := l.Packages[key]
 		if !ok {
-			return userErr(fmt.Sprintf("revert: %s is not in the previous lock", c.Name))
+			return userErr(fmt.Sprintf("revert: %s is not in the previous lock", name))
 		}
 		if !replayable(lp) {
-			return userErr(fmt.Sprintf("revert: %s has no version recorded in the snapshot (nothing to restore)", c.Name))
+			return userErr(fmt.Sprintf("revert: %s has no version recorded in the snapshot (nothing to restore)", name))
 		}
 		sp, err := specForKey(p, key)
 		if err != nil {
@@ -134,4 +168,53 @@ func (c *RevertCmd) Run(ctx context.Context, cli *CLI) error {
 	}
 	_, err = pl.Apply(ctx, rep)
 	return err
+}
+
+func noSnapshot(n int) error {
+	if n == 1 {
+		return userErr(`revert: no snapshot yet (one is taken before each project write; "snapshots" in phuo.json sets how many are kept)`)
+	}
+	return userErr(fmt.Sprintf("revert: no snapshot %d (\"snapshots\" in phuo.json sets how many are kept)", n))
+}
+
+func pickSnapshot(p *project.Project) (int, error) {
+	limit := p.Manifest.SnapshotCount()
+	opts := make([]huh.Option[string], 0, limit)
+	for i := 1; i <= limit; i++ {
+		_, l, ok, err := p.Previous(i)
+		if err != nil {
+			return 0, err
+		}
+		if !ok {
+			continue
+		}
+		opts = append(opts, huh.NewOption(fmt.Sprintf("%d  %d changes", i, snapshotChanges(p.Lock, l)), strconv.Itoa(i)))
+	}
+	if len(opts) == 0 {
+		return 0, noSnapshot(1)
+	}
+	if len(opts) == 1 {
+		return strconv.Atoi(opts[0].Value)
+	}
+	s, err := pickOne("Snapshot", opts)
+	if err != nil || s == "" {
+		return 0, err
+	}
+	return strconv.Atoi(s)
+}
+
+func snapshotChanges(cur, old project.Lock) int {
+	n := 0
+	for key, lp := range cur.Packages {
+		prev, ok := old.Packages[key]
+		if !ok || prev.SHA != lp.SHA {
+			n++
+		}
+	}
+	for key := range old.Packages {
+		if _, ok := cur.Packages[key]; !ok {
+			n++
+		}
+	}
+	return n
 }

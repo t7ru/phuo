@@ -14,6 +14,12 @@ import (
 	"github.com/t7ru/phuo/internal/spec"
 )
 
+func pickOne(title string, opts []huh.Option[string]) (string, error) {
+	var out string
+	err := abort(form(huh.NewSelect[string]().Title(title).Options(opts...).Value(&out)))
+	return out, err
+}
+
 func pickMany(title string, opts []huh.Option[string]) ([]string, error) {
 	var out []string
 	if err := abort(form(huh.NewMultiSelect[string]().Title(title).Options(opts...).Filtering(true).Value(&out))); err != nil {
