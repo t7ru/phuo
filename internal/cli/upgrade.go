@@ -42,6 +42,9 @@ func init() {
 	for _, m := range matches {
 		os.Remove(m)
 	}
+	if runtime.GOOS == "windows" {
+		os.Remove(exe + "~") // clean freak
+	}
 }
 
 type UpgradeCmd struct{}
