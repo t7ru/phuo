@@ -29,6 +29,7 @@ type CLI struct {
 
 	Init        InitCmd        `cmd:"" help:"Create phuo.json in a MediaWiki root."`
 	Add         AddCmd         `cmd:"" aliases:"a" help:"Add extensions or skins."`
+	Adopt       AdoptCmd       `cmd:"" help:"Move your wfLoad* lines for installed packages into the phuo block."`
 	Remove      RemoveCmd      `cmd:"" aliases:"rm,uninstall" help:"Remove extensions or skins."`
 	Enable      EnableCmd      `cmd:"" help:"Load installed packages via LocalSettings.php."`
 	Disable     DisableCmd     `cmd:"" help:"Keep installed packages out of LocalSettings.php."`

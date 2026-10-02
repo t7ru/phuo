@@ -74,14 +74,14 @@ func Scan(path string) (File, error) {
 	if err != nil {
 		return File{}, err
 	}
-	f, err := scan(b)
+	f, err := ScanBytes(b)
 	if err != nil {
 		return File{}, fmt.Errorf("%s: %w", path, err)
 	}
 	return f, nil
 }
 
-func scan(b []byte) (File, error) {
+func ScanBytes(b []byte) (File, error) {
 	start, end, err := blockRange(b)
 	if err != nil {
 		return File{}, err
@@ -89,18 +89,6 @@ func scan(b []byte) (File, error) {
 	cm, err := comments(b)
 	if err != nil {
 		return File{}, err
-	}
-	inComment := func(p int) bool {
-		_, ok := slices.BinarySearchFunc(cm, p, func(r [2]int, p int) int {
-			switch {
-			case r[1] <= p:
-				return -1
-			case r[0] > p:
-				return 1
-			}
-			return 0
-		})
-		return ok
 	}
 	f := File{Line: map[string]int{}}
 	const (
@@ -112,7 +100,7 @@ func scan(b []byte) (File, error) {
 	var order []string
 	for _, m := range loadRe.FindAllSubmatchIndex(b, -1) {
 		inside := start >= 0 && m[0] >= start && m[1] <= end
-		off := inComment(m[0])
+		off := commented(cm, m[0])
 		if inside && off {
 			continue
 		}
@@ -157,7 +145,7 @@ func scan(b []byte) (File, error) {
 	}
 	s := &f.Settings
 	for _, m := range settingRe.FindAllSubmatchIndex(b, -1) {
-		if inComment(m[0]) {
+		if commented(cm, m[0]) {
 			continue
 		}
 		v := m[4:6]
@@ -219,7 +207,7 @@ func Write(path string, want Loads) (changed bool, err error) {
 	if err != nil {
 		return false, err
 	}
-	out, err := render(b, want)
+	out, err := Render(b, want)
 	if err != nil {
 		return false, fmt.Errorf("%s: %w", path, err)
 	}
@@ -232,7 +220,7 @@ func Write(path string, want Loads) (changed bool, err error) {
 	return true, nil
 }
 
-func render(b []byte, want Loads) ([]byte, error) {
+func Render(b []byte, want Loads) ([]byte, error) {
 	crlf := bytes.Contains(b, []byte("\r\n"))
 	nl := "\n"
 	if crlf {
@@ -279,6 +267,111 @@ func render(b []byte, want Loads) ([]byte, error) {
 		return removeBlock(b, start, end, crlf), nil
 	}
 	return slices.Concat(b[:start], []byte(block), b[end:]), nil
+}
+
+// calls inside the managed block, and commented-out calls, are deliberate
+func Drop(b []byte, keys []string) ([]byte, error) {
+	if len(keys) == 0 {
+		return b, nil
+	}
+	drop := make(map[string]struct{}, len(keys))
+	for _, k := range keys {
+		drop[k] = struct{}{}
+	}
+	start, end, err := blockRange(b)
+	if err != nil {
+		return nil, err
+	}
+	cm, err := comments(b)
+	if err != nil {
+		return nil, err
+	}
+	matches := loadRe.FindAllSubmatchIndex(b, -1)
+	for i := len(matches) - 1; i >= 0; i-- {
+		m := matches[i]
+		if commented(cm, m[0]) || (start >= 0 && m[0] >= start && m[1] <= end) {
+			continue
+		}
+		blob := -1
+		for _, g := range []int{4, 6, 8} {
+			if m[g] >= 0 {
+				blob = g
+				break
+			}
+		}
+		if blob < 0 {
+			continue
+		}
+		typ := "extensions/"
+		if b[m[2]] == 'S' {
+			typ = "skins/"
+		}
+		var kept []string
+		hit := false
+		for _, n := range nameRe.FindAllSubmatch(b[m[blob]:m[blob+1]], -1) {
+			if _, ok := drop[typ+string(n[1])]; ok {
+				hit = true
+				continue
+			}
+			kept = append(kept, string(n[1]))
+		}
+		if !hit {
+			continue
+		}
+		if len(kept) == 0 {
+			b = cutCall(b, m[0], m[1])
+			continue
+		}
+		b = slices.Concat(b[:m[blob]], []byte(quoteList(kept)), b[m[blob+1]:])
+	}
+	return b, nil
+}
+
+func commented(cm [][2]int, p int) bool {
+	_, ok := slices.BinarySearchFunc(cm, p, func(r [2]int, p int) int {
+		switch {
+		case r[1] <= p:
+			return -1
+		case r[0] > p:
+			return 1
+		}
+		return 0
+	})
+	return ok
+}
+
+func cutCall(b []byte, from, to int) []byte {
+	end := to
+	for end < len(b) && (b[end] == ' ' || b[end] == '\t') {
+		end++
+	}
+	if end < len(b) && b[end] == ';' {
+		end++
+	}
+	ls := bytes.LastIndexByte(b[:from], '\n') + 1
+	le := len(b)
+	if i := bytes.IndexByte(b[from:], '\n'); i >= 0 {
+		le = from + i + 1
+	}
+	onlySpace := true
+	for _, c := range b[ls:from] {
+		if c != ' ' && c != '\t' && c != '\r' {
+			onlySpace = false
+			break
+		}
+	}
+	if onlySpace {
+		for _, c := range b[end:le] {
+			if c != ' ' && c != '\t' && c != '\r' && c != '\n' {
+				onlySpace = false
+				break
+			}
+		}
+	}
+	if onlySpace {
+		return slices.Concat(b[:ls], b[le:])
+	}
+	return slices.Concat(b[:from], b[end:])
 }
 
 func quoteList(names []string) string {

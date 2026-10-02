@@ -23,7 +23,9 @@ import (
 	"github.com/t7ru/phuo/internal/ui"
 )
 
-type InitCmd struct{}
+type InitCmd struct {
+	ManageLoads bool `name:"manage-loads" help:"Move wfLoad* lines for adopted packages into the phuo block."`
+}
 
 type AddCmd struct {
 	Specs        []string `arg:"" optional:"" name:"spec" help:"Package specs to add; omit to search and pick."`

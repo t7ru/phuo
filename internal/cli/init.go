@@ -118,6 +118,9 @@ func (c *InitCmd) Run(ctx context.Context, cli *CLI) error {
 	if len(m.Disabled) > 0 {
 		rep.Info("disabled packages were not loaded by LocalSettings.php; phuo enable <name> to load one")
 	}
+	if c.ManageLoads {
+		return adoptLoads(p, rep)
+	}
 	return nil
 }
 
