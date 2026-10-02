@@ -109,6 +109,18 @@ func splitVer(v string) (nums []int, pre string, ok bool) {
 	return nums, pre, true
 }
 
+func Tag(v string) string {
+	_, pre, ok := splitVer(v)
+	if !ok || pre != "" {
+		return ""
+	}
+	v, _, _ = strings.Cut(v, "+")
+	if !strings.HasPrefix(v, "v") {
+		return "v" + v
+	}
+	return v
+}
+
 func UserAgent() string {
 	return "phuo/" + String() + " (+https://github.com/t7ru/phuo)"
 }

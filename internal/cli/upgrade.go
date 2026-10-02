@@ -47,10 +47,11 @@ func init() {
 type UpgradeCmd struct{}
 
 type upgradeResult struct {
-	Current string `json:"current"`
-	Latest  string `json:"latest"`
-	Updated bool   `json:"updated"`
-	Hint    string `json:"hint,omitzero"`
+	Current   string `json:"current"`
+	Latest    string `json:"latest"`
+	Updated   bool   `json:"updated"`
+	Hint      string `json:"hint,omitzero"`
+	Changelog string `json:"changelog,omitzero"`
 }
 
 func (c *UpgradeCmd) Run(ctx context.Context, cli *CLI) error {
@@ -174,7 +175,7 @@ func goInstall(ctx context.Context, cli *CLI, rep *ui.Reporter, goExe, cur, late
 		}
 		return fmt.Errorf("go install github.com/%s@latest: %w", repo, err)
 	}
-	return upgradeResult{Current: cur, Latest: latest, Updated: true}.finish(cli, rep, fmt.Sprintf("upgraded %s -> %s", cur, latest))
+	return upgraded(cli, rep, cur, latest)
 }
 
 func upgradeRelease(ctx context.Context, cli *CLI, rep *ui.Reporter, cur string, rel ghRelease) error {
@@ -210,7 +211,24 @@ func upgradeRelease(ctx context.Context, cli *CLI, rep *ui.Reporter, cur string,
 	if err := replaceExe(bin, exe); err != nil {
 		return fmt.Errorf("replace %s: %w", exe, err)
 	}
-	return upgradeResult{Current: cur, Latest: rel.TagName, Updated: true}.finish(cli, rep, fmt.Sprintf("upgraded %s -> %s", cur, rel.TagName))
+	return upgraded(cli, rep, cur, rel.TagName)
+}
+
+func upgraded(cli *CLI, rep *ui.Reporter, cur, latest string) error {
+	out := upgradeResult{Current: cur, Latest: latest, Updated: true, Changelog: compareURL(cur, latest)}
+	msg := fmt.Sprintf("upgraded %s -> %s", cur, latest)
+	if out.Changelog == "" {
+		return out.finish(cli, rep, msg)
+	}
+	return out.finish(cli, rep, msg, out.Changelog)
+}
+
+func compareURL(from, to string) string {
+	a, b := version.Tag(from), version.Tag(to)
+	if a == "" || b == "" || a == b {
+		return ""
+	}
+	return "https://github.com/" + repo + "/compare/" + a + "..." + b
 }
 
 func assetName(tag, goos, goarch string) (string, error) {
