@@ -320,7 +320,7 @@ func (pl *Plan) applyInstall(ctx context.Context, reporter *ui.Reporter) (Summar
 				continue
 			}
 			if it.fallback404 {
-				reporter.Warn("%s: snapshot tarball gone, rebuilt from source at %s", it.res.Name, shortSHA(it.res.SHA))
+				reporter.Warn("%s: snapshot tarball unavailable, rebuilt from source at %s", it.res.Name, shortSHA(it.res.SHA))
 			} else if it.integrityWarn {
 				reporter.Warn("%s: integrity mismatch (updating lock)", it.res.Name)
 			}
@@ -757,22 +757,9 @@ func (pl *Plan) fetchFromLock(ctx context.Context, it *workItem, lp project.Pack
 		return err
 	}
 	if err := pl.fetchArchive(ctx, it, cacheDir); err != nil {
-		if isHTTP404(err) && lp.SHA != "" && lp.Source != "" {
-			fb, ok := source.ArchiveAt(lp.Source, lp.SHA)
-			if !ok {
-				return err
-			}
-			it.res.Archive = fb
-			if err2 := pl.fetchArchive(ctx, it, cacheDir); err2 != nil {
-				return err2
-			}
-			it.integrityWarn = true
-			it.fallback404 = true
-			return nil
-		}
 		return err
 	}
-	if lp.Integrity != "" && it.integrity != lp.Integrity {
+	if lp.Integrity != "" && it.integrity != lp.Integrity && !it.fallback404 {
 		if !pl.opts.Force {
 			os.RemoveAll(it.tmpDir)
 			return fmt.Errorf("%s: integrity mismatch", name)
@@ -794,6 +781,16 @@ func (pl *Plan) fetchArchive(ctx context.Context, it *workItem, cacheDir string)
 	it.tmpDir = filepath.Join(parent, ".phuo-tmp", it.res.Name)
 	os.RemoveAll(it.tmpDir)
 	integrity, err := fetchInto(ctx, it.res, it.tmpDir, cacheDir)
+	// extdist lists branch tips before their tarballs exist
+	// therefore a snapshot URL can 404
+	if isHTTP404(err) && it.res.SHA != "" && it.res.Source != "" {
+		if fb, ok := source.ArchiveAt(it.res.Source, it.res.SHA); ok && fb != it.res.Archive {
+			os.RemoveAll(it.tmpDir)
+			it.res.Archive = fb
+			it.fallback404 = true
+			integrity, err = fetchInto(ctx, it.res, it.tmpDir, cacheDir)
+		}
+	}
 	if err != nil {
 		os.RemoveAll(it.tmpDir)
 		return err
