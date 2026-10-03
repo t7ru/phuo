@@ -711,6 +711,7 @@ type PmCmd struct {
 func registryClient(cli *CLI, p *project.Project) *registry.Client {
 	return &registry.Client{
 		HTTP:     fetch.Client(),
+		BaseURL:  p.Manifest.Registry,
 		CacheDir: p.CacheDir,
 		Offline:  cli.Offline,
 		NoCache:  cli.NoCache,

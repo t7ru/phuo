@@ -100,11 +100,8 @@ func (c *InitCmd) Run(ctx context.Context, cli *CLI) error {
 		return err
 	}
 
-	p := &project.Project{
-		Root: root, MWVersion: ver, Rel: project.Rel(ver),
-		Manifest: m, Lock: lock,
-	}
-	p.Paths.Extensions, p.Paths.Skins = "extensions", "skins"
+	p := &project.Project{Root: root, MWVersion: ver}
+	p.SetState(m, lock)
 	if err := p.Save(); err != nil {
 		return err
 	}

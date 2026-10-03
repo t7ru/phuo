@@ -232,7 +232,7 @@ func (pl *Plan) applyInstall(ctx context.Context, reporter *ui.Reporter) (Summar
 
 	reg := &registry.Client{
 		HTTP:     fetch.Client(),
-		BaseURL:  pl.opts.BaseURL,
+		BaseURL:  cmp.Or(pl.opts.BaseURL, pl.p.Manifest.Registry),
 		CacheDir: pl.p.CacheDir,
 		Offline:  pl.opts.Offline,
 		NoCache:  pl.opts.NoCache,

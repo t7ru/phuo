@@ -17,7 +17,7 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-const defaultBaseURL = "https://www.mediawiki.org/w/api.php"
+const DefaultBaseURL = "https://www.mediawiki.org/w/api.php"
 
 type Client struct {
 	HTTP     *http.Client
@@ -60,7 +60,7 @@ func (c *Client) base() string {
 	if c.BaseURL != "" {
 		return c.BaseURL
 	}
-	return defaultBaseURL
+	return DefaultBaseURL
 }
 
 func (c *Client) Repos(ctx context.Context) (exts, skins []string, err error) {
