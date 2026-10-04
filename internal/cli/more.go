@@ -643,24 +643,45 @@ func (c *WhyCmd) Run(ctx context.Context, cli *CLI) error {
 		return nil
 	}
 	name := keyName(key)
-	typ := keyType(key)
-	found := false
+	rep.Info("%s", name)
+	rev := map[string][]whyParent{}
 	for k, pkg := range p.Lock.Packages {
-		var m map[string]string
-		if typ == "skins" {
-			m = pkg.Requires.Skins
-		} else {
-			m = pkg.Requires.Extensions
+		for name, cstr := range pkg.Requires.Extensions {
+			ck := "extensions/" + name
+			rev[ck] = append(rev[ck], whyParent{k, cstr})
 		}
-		if cstr, ok := m[name]; ok {
-			rep.Info("%s requires %s (%s)", keyName(k), name, cstr)
-			found = true
+		for name, cstr := range pkg.Requires.Skins {
+			ck := "skins/" + name
+			rev[ck] = append(rev[ck], whyParent{k, cstr})
 		}
 	}
-	if !found {
+	for _, parents := range rev {
+		slices.SortFunc(parents, func(a, b whyParent) int { return cmp.Compare(a.key, b.key) })
+	}
+	if len(rev[key]) == 0 {
 		rep.Info("%s is a dep with no recorded requirers", name)
+		return nil
 	}
+	seen := map[string]bool{key: true}
+	var walk func(child string, depth int)
+	walk = func(child string, depth int) {
+		for _, pr := range rev[child] {
+			if seen[pr.key] {
+				continue
+			}
+			rep.Info("%s%s requires %s (%s)", strings.Repeat("  ", depth), keyName(pr.key), keyName(child), pr.constraint)
+			seen[pr.key] = true
+			walk(pr.key, depth+1)
+			delete(seen, pr.key)
+		}
+	}
+	walk(key, 1)
 	return nil
+}
+
+type whyParent struct {
+	key        string
+	constraint string
 }
 
 type ChangelogCmd struct {
