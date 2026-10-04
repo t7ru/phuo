@@ -1459,7 +1459,7 @@ func (pl *Plan) schemaPrompt(ctx context.Context, reporter *ui.Reporter, keys []
 	phpBin, phpOK := pl.p.Manifest.PHP.Value("php")
 	p := mw.PHP{Bin: phpBin, Root: pl.p.Root}
 	if phpOK && p.Available() {
-		if pl.opts.UpdateDB || (pl.opts.Ask != nil && pl.opts.Ask(fmt.Sprintf("Run update.php now? (%s changed the schema)", strings.Join(need, ", ")))) {
+		if pl.opts.UpdateDB || (pl.opts.Ask != nil && pl.opts.Ask(fmt.Sprintf("Run update.php now? (%s may have changed the schema)", strings.Join(need, ", ")))) {
 			if err := p.UpdateDB(ctx, nil); err != nil {
 				reporter.Warn("update.php: %v", err)
 			}
