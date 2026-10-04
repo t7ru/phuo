@@ -4,11 +4,12 @@ import (
 	"runtime/debug"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 var stamp string
 
-func String() string {
+var String = sync.OnceValue(func() string {
 	if stamp != "" {
 		return stamp
 	}
@@ -16,7 +17,7 @@ func String() string {
 		return v
 	}
 	return "seven"
-}
+})
 
 func Module() string {
 	if stamp != "" {
