@@ -229,6 +229,9 @@ func (pl *Plan) applyInstall(ctx context.Context, reporter *ui.Reporter) (Summar
 			return Summary{}, err
 		}
 	}
+	if os.Geteuid() == 0 && !pl.opts.DryRun && !pl.opts.LockfileOnly {
+		reporter.Warn("running as root! phuo will keep existing packages' owners while new ones inherit the parent's")
+	}
 
 	reg := &registry.Client{
 		HTTP:     fetch.Client(),
@@ -462,6 +465,7 @@ func (pl *Plan) applyInstall(ctx context.Context, reporter *ui.Reporter) (Summar
 
 		dest := pl.destPath(it.key)
 		if !pl.opts.DryRun && !pl.opts.LockfileOnly {
+			uid, gid, had := statOwner(dest)
 			if it.res.Local != "" {
 				if err := linkLocal(it.res.Local, dest, pl.opts.Force); err != nil {
 					pl.cleanupTemps(done)
@@ -481,6 +485,11 @@ func (pl *Plan) applyInstall(ctx context.Context, reporter *ui.Reporter) (Summar
 			}
 			if err := project.WriteStamp(dest, project.Stamp{SHA: it.res.SHA, Ref: it.res.Ref, Spec: lockSpec}); err != nil {
 				return sum, err
+			}
+			if it.res.Local == "" {
+				if err := keepOwner(dest, uid, gid, had); err != nil {
+					return sum, err
+				}
 			}
 		} else {
 			os.RemoveAll(it.tmpDir)
@@ -570,6 +579,19 @@ func (pl *Plan) applyInstall(ctx context.Context, reporter *ui.Reporter) (Summar
 		reporter.Info("already up to date")
 	}
 	return sum, nil
+}
+
+func keepOwner(dest string, uid, gid int, had bool) error {
+	if os.Geteuid() != 0 {
+		return nil
+	}
+	if !had {
+		var ok bool
+		if uid, gid, ok = statOwner(filepath.Dir(dest)); !ok {
+			return nil
+		}
+	}
+	return chownTree(dest, uid, gid)
 }
 
 // one registry query per round
