@@ -359,7 +359,8 @@ func lsRows(p *project.Project, all bool, ls *localsettings.File) [][]string {
 }
 
 type InfoCmd struct {
-	Name string `arg:"" name:"name" help:"Package name."`
+	Name  string `arg:"" name:"name" help:"Package name."`
+	Field string `arg:"" optional:"" name:"field" help:"Field to print (e.g. version, license, requires, refs)."`
 }
 
 func (c *InfoCmd) Run(ctx context.Context, cli *CLI) error {
@@ -430,6 +431,55 @@ func (c *InfoCmd) Run(ctx context.Context, cli *CLI) error {
 		SHA         string            `json:"sha,omitzero"`
 		Refs        map[string]string `json:"refs"`
 	}
+	infoField := func(out infoOut, field string) (any, error) {
+		head, rest, _ := strings.Cut(field, ".")
+		switch strings.ToLower(head) {
+		case "name":
+			return out.Name, nil
+		case "type":
+			return out.Type, nil
+		case "description":
+			return out.Description, nil
+		case "status":
+			return out.Status, nil
+		case "policy":
+			return out.Policy, nil
+		case "url":
+			return out.URL, nil
+		case "version":
+			return out.Version, nil
+		case "license":
+			return out.License, nil
+		case "installed":
+			return out.Installed, nil
+		case "sha":
+			return out.SHA, nil
+		case "requires":
+			req := out.Requires
+			if req == nil {
+				req = &infoRequires{}
+			}
+			switch strings.ToLower(rest) {
+			case "":
+				return req, nil
+			case "mediawiki":
+				return req.MediaWiki, nil
+			case "extensions":
+				return req.Extensions, nil
+			case "skins":
+				return req.Skins, nil
+			}
+		case "refs":
+			if rest == "" {
+				return out.Refs, nil
+			}
+			if sha, ok := out.Refs[rest]; ok {
+				return sha, nil
+			}
+			return "", userErr(fmt.Sprintf("unknown ref %q", rest))
+		}
+		return nil, userErr(fmt.Sprintf("unknown field %q", field))
+	}
 	out := infoOut{
 		Name: name, Type: typ, Description: pol.Description, Status: pol.Status,
 		Policy: kind, URL: br.Source, Refs: map[string]string{},
@@ -456,6 +506,24 @@ func (c *InfoCmd) Run(ctx context.Context, cli *CLI) error {
 		out.Refs[ref] = source.ArchiveSHA(url)
 	}
 	slices.Sort(refs)
+	if c.Field != "" {
+		v, err := infoField(out, c.Field)
+		if err != nil {
+			return err
+		}
+		if cli.JSON {
+			return json.MarshalWrite(os.Stdout, v, json.Deterministic(true))
+		}
+		switch v := v.(type) {
+		case string:
+			rep.Info("%s", v)
+		case bool:
+			rep.Info("%t", v)
+		default:
+			return json.MarshalWrite(os.Stdout, v, json.Deterministic(true))
+		}
+		return nil
+	}
 	if cli.JSON {
 		return json.MarshalWrite(os.Stdout, out, json.Deterministic(true))
 	}
