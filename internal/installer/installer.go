@@ -566,6 +566,9 @@ func (pl *Plan) applyInstall(ctx context.Context, reporter *ui.Reporter) (Summar
 		if err := pl.finishMW(ctx, reporter, cplan, done); err != nil {
 			return sum, err
 		}
+		if !pl.opts.LockfileOnly {
+			pl.warnShadows(reporter, done)
+		}
 	}
 	if n := extN + skinN; n > 0 && pl.opts.DryRun {
 		reporter.Info("%s", countMsg(extN, skinN)+" would be installed")
@@ -592,6 +595,34 @@ func keepOwner(dest string, uid, gid int, had bool) error {
 		}
 	}
 	return chownTree(dest, uid, gid)
+}
+
+func (pl *Plan) warnShadows(reporter *ui.Reporter, done []*workItem) {
+	// only this run's packages are checked
+	// so pre-existing conflicts don't re-warn
+	touched := make(map[string]bool, len(done))
+	for _, it := range done {
+		if !it.keep {
+			touched[it.key] = true
+		}
+	}
+	if len(touched) == 0 {
+		return
+	}
+	dirs := make(map[string]string, len(pl.p.Lock.Packages))
+	for key := range pl.p.Lock.Packages {
+		dirs[key] = pl.destPath(key)
+	}
+	shadows, err := composer.DetectShadows(pl.p.Root, dirs)
+	if err != nil {
+		reporter.Warn("composer: %v", err)
+		return
+	}
+	for _, s := range shadows {
+		if slices.ContainsFunc(s.Copies, func(c composer.ShadowCopy) bool { return touched[c.Where] }) {
+			reporter.Warn("%s (load order decides which copy wins)", s)
+		}
+	}
 }
 
 // one registry query per round

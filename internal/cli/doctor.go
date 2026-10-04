@@ -146,6 +146,7 @@ func (c *DoctorCmd) Run(ctx context.Context, cli *CLI) error {
 	if err := doctorComposer(p, problem, rep.Warn); err != nil {
 		return err
 	}
+	doctorShadows(p, rep.Warn)
 
 	for _, pair := range [][2]string{{p.Paths.Extensions, "extensions/"}, {p.Paths.Skins, "skins/"}} {
 		dir := filepath.Join(p.Root, pair[0])
@@ -270,6 +271,21 @@ func doctorComposer(p *project.Project, problem func(string, ...any), warn func(
 		warn("composer.lock stale: vendor/composer/installed.json older than composer.local.json")
 	}
 	return nil
+}
+
+func doctorShadows(p *project.Project, warn func(string, ...any)) {
+	dirs := make(map[string]string, len(p.Lock.Packages))
+	for key := range p.Lock.Packages {
+		dirs[key] = packageDir(p, key)
+	}
+	shadows, err := composer.DetectShadows(p.Root, dirs)
+	if err != nil {
+		warn("composer: %v", err)
+		return
+	}
+	for _, s := range shadows {
+		warn("%s (load order decides which copy wins)", s)
+	}
 }
 
 func composerIncludes(doc map[string]any) []string {
