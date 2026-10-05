@@ -1,7 +1,9 @@
 package manifest
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -199,7 +201,7 @@ func (e *epoch) UnmarshalJSON(b []byte) error {
 
 type gitInfo struct {
 	HeadSHA1       string `json:"headSHA1"`
-	HeadCommitDate epoch  `json:"headCommitDate"`
+	HeadCommitDate epoch  `json:"headCommitDate,omitzero"`
 	RemoteURL      string `json:"remoteURL"`
 }
 
@@ -213,6 +215,26 @@ func ReadGitInfo(dir string) (sha string, date time.Time, remote string, err err
 		return "", time.Time{}, "", err
 	}
 	return strings.TrimSpace(g.HeadSHA1), time.Unix(int64(g.HeadCommitDate), 0).UTC(), g.RemoteURL, nil
+}
+
+func WriteGitInfo(dir, sha string, date time.Time, remote string) error {
+	g := gitInfo{HeadSHA1: sha, RemoteURL: remote}
+	if !date.IsZero() {
+		g.HeadCommitDate = epoch(date.Unix())
+	}
+	b, err := json.Marshal(g)
+	if err != nil {
+		return err
+	}
+	f, err := os.OpenFile(filepath.Join(dir, "gitinfo.json"), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if errors.Is(err, fs.ErrExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(append(b, '\n'))
+	return errors.Join(err, f.Close())
 }
 
 func ReadVersionFile(dir string) (name, ref string, err error) {

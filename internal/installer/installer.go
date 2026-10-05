@@ -482,6 +482,12 @@ func (pl *Plan) applyInstall(ctx context.Context, reporter *ui.Reporter) (Summar
 				}
 				os.RemoveAll(it.tmpDir)
 				it.tmpDir = ""
+				if it.res.Clone == "" && source.IsFullSHA(it.res.SHA) {
+					if err := manifest.WriteGitInfo(dest, it.res.SHA, it.res.Date, it.res.Source); err != nil {
+						pl.cleanupTemps(done)
+						return sum, err
+					}
+				}
 			}
 			if err := project.WriteStamp(dest, project.Stamp{SHA: it.res.SHA, Ref: it.res.Ref, Spec: lockSpec}); err != nil {
 				return sum, err
