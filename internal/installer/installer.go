@@ -300,6 +300,7 @@ func (pl *Plan) applyInstall(ctx context.Context, reporter *ui.Reporter) (Summar
 		reporter.Progress("installing %d packages...", len(round))
 		for _, it := range round {
 			if it.keep {
+				it.kind = OpKeep
 				done = append(done, it)
 				pl.Ops = append(pl.Ops, Op{Key: it.key, Kind: OpKeep, To: it.res.Ref})
 				if lp, ok := pl.p.Lock.Packages[it.key]; ok {
@@ -590,6 +591,23 @@ func (pl *Plan) applyInstall(ctx context.Context, reporter *ui.Reporter) (Summar
 		reporter.Info("%s", countMsg(extN, skinN)+" "+verb)
 	} else if len(pl.add) > 0 {
 		reporter.Info("already up to date")
+	}
+	if !pl.opts.DryRun && !pl.opts.LockfileOnly && !pl.opts.Revert {
+		for _, it := range done {
+			if it.kind != OpAdd || !it.direct {
+				continue
+			}
+			url := it.man.URL
+			if it.spec.Kind == spec.Registry {
+				typ, _, _ := strings.Cut(it.key, "/")
+				if page := registry.PageURL(pl.p.Manifest.Registry, typ, it.res.Name); page != "" {
+					url = page
+				}
+			}
+			if url != "" {
+				reporter.Info("%s: %s", keyName(it.key), url)
+			}
+		}
 	}
 	return sum, nil
 }
