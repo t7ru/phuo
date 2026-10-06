@@ -6,12 +6,15 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
+	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -27,7 +30,7 @@ var (
 func Client() *http.Client {
 	clientOnce.Do(func() {
 		shared = &http.Client{
-			Transport: &uaTransport{
+			Transport: &retryTransport{base: &uaTransport{
 				base: &http.Transport{
 					ForceAttemptHTTP2:     true,
 					MaxIdleConnsPerHost:   16,
@@ -35,10 +38,84 @@ func Client() *http.Client {
 					ResponseHeaderTimeout: 30 * time.Second,
 				},
 				auth: hostAuth(),
-			},
+			}},
 		}
 	})
 	return shared
+}
+
+const (
+	retryAttempts = 3
+	retryBackoff  = 250 * time.Millisecond
+	retryMaxWait  = 5 * time.Second
+)
+
+type retryTransport struct{ base http.RoundTripper }
+
+func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.Body != nil && req.GetBody == nil {
+		return t.base.RoundTrip(req)
+	}
+	for attempt := 0; ; attempt++ {
+		res, err := t.base.RoundTrip(req)
+		if attempt >= retryAttempts-1 || !retryable(res, err) {
+			return res, err
+		}
+		if res != nil {
+			io.Copy(io.Discard, io.LimitReader(res.Body, 1<<16))
+			res.Body.Close()
+		}
+		if !sleepCtx(req.Context(), retryDelay(res, attempt)) {
+			return nil, req.Context().Err()
+		}
+		if req.GetBody != nil {
+			body, err := req.GetBody()
+			if err != nil {
+				return nil, err
+			}
+			req = req.Clone(req.Context())
+			req.Body = body
+		}
+	}
+}
+
+func retryable(res *http.Response, err error) bool {
+	if err != nil {
+		return !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded)
+	}
+	switch res.StatusCode {
+	case http.StatusRequestTimeout, http.StatusTooManyRequests,
+		http.StatusInternalServerError, http.StatusBadGateway,
+		http.StatusServiceUnavailable, http.StatusGatewayTimeout:
+		return true
+	}
+	return false
+}
+
+func retryDelay(res *http.Response, attempt int) time.Duration {
+	if res != nil {
+		if v := res.Header.Get("Retry-After"); v != "" {
+			if secs, err := strconv.Atoi(v); err == nil {
+				return min(time.Duration(secs)*time.Second, retryMaxWait)
+			}
+			if at, err := http.ParseTime(v); err == nil {
+				return min(max(time.Until(at), 0), retryMaxWait)
+			}
+		}
+	}
+	d := retryBackoff << attempt
+	return d + rand.N(d/2)
+}
+
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-t.C:
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
 
 // exact host match so tokens never travel to other origins
