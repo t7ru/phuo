@@ -608,12 +608,8 @@ func (c *InfoCmd) Run(ctx context.Context, cli *CLI) error {
 	if pol.Phabricator != "" {
 		out.Issues = "https://phabricator.wikimedia.org/tag/" + strings.ToLower(pol.Phabricator) + "/"
 	}
-	if r := p.Manifest.Registry; found && (r == "" || strings.Contains(r, "mediawiki.org")) {
-		ns := "Extension:"
-		if typ == "skins" {
-			ns = "Skin:"
-		}
-		out.Page = "https://www.mediawiki.org/wiki/" + ns + strings.ReplaceAll(name, " ", "_")
+	if found {
+		out.Page = registry.PageURL(p.Manifest.Registry, typ, name)
 	}
 	if pol.Author != "" {
 		out.Authors = []string{pol.Author}

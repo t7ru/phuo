@@ -74,6 +74,17 @@ func (c *Client) base() string {
 	return DefaultBaseURL
 }
 
+func PageURL(base, typ, name string) string {
+	if base != "" && !strings.Contains(base, "mediawiki.org") {
+		return ""
+	}
+	ns := "Extension:"
+	if typ == "skins" {
+		ns = "Skin:"
+	}
+	return "https://www.mediawiki.org/wiki/" + ns + strings.ReplaceAll(name, " ", "_")
+}
+
 func (c *Client) Repos(ctx context.Context) (exts, skins []string, err error) {
 	q := url.Values{
 		"action":        {"query"},
