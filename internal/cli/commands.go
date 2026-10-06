@@ -189,6 +189,7 @@ type InstallCmd struct {
 	LockfileOnly   bool `name:"lockfile-only" help:"Resolve and write lock only."`
 	Force          bool `name:"force" short:"f" help:"Force reinstall."`
 	DryRun         bool `name:"dry-run" help:"Plan only; write nothing."`
+	UpdateDB       bool `name:"update-db" help:"Run update.php after install."`
 }
 
 func (c *InstallCmd) Run(ctx context.Context, cli *CLI) error {
@@ -202,7 +203,7 @@ func (c *InstallCmd) Run(ctx context.Context, cli *CLI) error {
 	}
 	pl, err := installer.NewPlan(p, specs, nil, installer.Options{
 		Force: c.Force, DryRun: c.DryRun, LockfileOnly: c.LockfileOnly, Frozen: c.FrozenLockfile,
-		NoCache: cli.NoCache, Offline: cli.Offline, Jobs: cli.Jobs,
+		UpdateDB: c.UpdateDB, NoCache: cli.NoCache, Offline: cli.Offline, Jobs: cli.Jobs,
 		Ask: asker(cli),
 	})
 	if err != nil {
@@ -237,6 +238,7 @@ type UpdateCmd struct {
 	DryRun      bool     `name:"dry-run" help:"Plan only; write nothing."`
 	Latest      bool     `name:"latest" help:"Move REL pins up to the derived rel."`
 	L10n        bool     `name:"l10n" help:"Include packages whose only new commits are translations."`
+	UpdateDB    bool     `name:"update-db" help:"Run update.php after update."`
 }
 
 func (c *UpdateCmd) Run(ctx context.Context, cli *CLI) error {
@@ -282,7 +284,7 @@ func (c *UpdateCmd) Run(ctx context.Context, cli *CLI) error {
 		}
 	}
 	pl, err := installer.NewPlan(p, specs, nil, installer.Options{
-		DryRun: c.DryRun, Update: true, L10n: c.L10n,
+		DryRun: c.DryRun, Update: true, L10n: c.L10n, UpdateDB: c.UpdateDB,
 		NoCache: cli.NoCache, Offline: cli.Offline, Registry: reg, Jobs: cli.Jobs,
 		Ask: asker(cli),
 	})
