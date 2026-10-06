@@ -186,21 +186,8 @@ func Download(ctx context.Context, url, cacheDir string, w io.Writer) (string, e
 		}
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return "", err
-	}
-	res, err := Client().Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer res.Body.Close()
-	if res.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("%s: HTTP %d", url, res.StatusCode)
-	}
-
 	h := sha256.New()
-	writers := []io.Writer{w, h}
+	writers := []io.Writer{h, w}
 	var partPath string
 	var part *os.File
 	if cacheDir != "" {
@@ -209,26 +196,62 @@ func Download(ctx context.Context, url, cacheDir string, w io.Writer) (string, e
 			return "", err
 		}
 		partPath = filepath.Join(dir, urlKey(url)+".part")
-		part, err = os.Create(partPath)
+		f, err := os.Create(partPath)
 		if err != nil {
 			return "", err
 		}
-		writers = append(writers, part)
+		part = f
+		writers = append([]io.Writer{part}, writers...)
 	}
 	mw := io.MultiWriter(writers...)
-	_, copyErr := io.Copy(mw, res.Body)
+
+	// a dropped body resumes where it stopped: hash and part keep accumulating
+	var received int64
+	for attempt := 0; ; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			return "", failDownload(part, partPath, err)
+		}
+		if received > 0 {
+			req.Header.Set("Range", "bytes="+strconv.FormatInt(received, 10)+"-")
+		}
+		res, err := Client().Do(req)
+		if err != nil {
+			if received == 0 || attempt >= retryAttempts-1 || ctx.Err() != nil {
+				return "", failDownload(part, partPath, err)
+			}
+			if !sleepCtx(ctx, retryDelay(nil, attempt)) {
+				return "", failDownload(part, partPath, ctx.Err())
+			}
+			continue
+		}
+		if received > 0 && res.StatusCode == http.StatusOK {
+			res.Body.Close()
+			return "", failDownload(part, partPath, fmt.Errorf("%s: server ignored Range on retry", url))
+		}
+		if res.StatusCode != http.StatusOK && res.StatusCode != http.StatusPartialContent {
+			res.Body.Close()
+			return "", failDownload(part, partPath, fmt.Errorf("%s: HTTP %d", url, res.StatusCode))
+		}
+		n, err := io.Copy(mw, res.Body)
+		res.Body.Close()
+		received += n
+		if err == nil {
+			break
+		}
+		// n == 0: the sink died but not the network
+		if n == 0 || attempt >= retryAttempts-1 || ctx.Err() != nil {
+			return "", failDownload(part, partPath, err)
+		}
+		if !sleepCtx(ctx, retryDelay(res, attempt)) {
+			return "", failDownload(part, partPath, ctx.Err())
+		}
+	}
 	if part != nil {
-		closeErr := part.Close()
-		if copyErr != nil {
+		if err := part.Close(); err != nil {
 			os.Remove(partPath)
-			return "", copyErr
+			return "", err
 		}
-		if closeErr != nil {
-			os.Remove(partPath)
-			return "", closeErr
-		}
-	} else if copyErr != nil {
-		return "", copyErr
 	}
 
 	sum := h.Sum(nil)
@@ -248,6 +271,14 @@ func Download(ctx context.Context, url, cacheDir string, w io.Writer) (string, e
 		}
 	}
 	return integrity, nil
+}
+
+func failDownload(part *os.File, partPath string, err error) error {
+	if part != nil {
+		part.Close()
+		os.Remove(partPath)
+	}
+	return err
 }
 
 func serveCached(cacheDir, url string, w io.Writer) (string, bool) {
