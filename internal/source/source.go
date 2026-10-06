@@ -270,7 +270,41 @@ func selectRef(name, pinned string, opts ResolveOpts, policy string, refs map[st
 			}
 		}
 	}
+	if best := nearestREL(refs, opts.Rel); best != "" {
+		return "", "", fmt.Errorf("no suitable ref for %s (available: %s); try phuo add %s@%s", name, list, name, best)
+	}
 	return "", "", fmt.Errorf("no suitable ref for %s (available: %s); try phuo add %s@REF", name, list, name)
+}
+
+func nearestREL(refs map[string]string, want string) string {
+	parse := func(s string) (maj, minor int, ok bool) {
+		rest, ok := strings.CutPrefix(s, "REL")
+		if !ok {
+			return 0, 0, false
+		}
+		majS, minS, ok := strings.Cut(rest, "_")
+		if !ok {
+			return 0, 0, false
+		}
+		maj, err1 := strconv.Atoi(majS)
+		minor, err2 := strconv.Atoi(minS)
+		return maj, minor, err1 == nil && err2 == nil
+	}
+	wantMaj, wantMinor, ok := parse(want)
+	if !ok {
+		return ""
+	}
+	best, bestNum := "", -1
+	for ref := range refs {
+		maj, minor, ok := parse(ref)
+		if !ok || maj > wantMaj || (maj == wantMaj && minor > wantMinor) {
+			continue
+		}
+		if n := maj*1000 + minor; n > bestNum {
+			best, bestNum = ref, n
+		}
+	}
+	return best
 }
 
 func sortedRefs(refs map[string]string) []string {
