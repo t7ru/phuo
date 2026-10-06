@@ -42,6 +42,10 @@ func (c *DoctorCmd) Run(ctx context.Context, cli *CLI) error {
 		return err == nil
 	}
 
+	if p.Lock.MediaWiki != "" && p.Lock.MediaWiki != p.MWVersion {
+		problem("lock was resolved for MediaWiki %s (now %s); run phuo update", p.Lock.MediaWiki, p.MWVersion)
+	}
+
 	plat, platOK := mw.Platform{}, false
 	if !p.Manifest.PHP.Disabled() {
 		bin, _ := p.Manifest.PHP.Value("php")
