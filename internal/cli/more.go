@@ -93,7 +93,7 @@ func (c *OutdatedCmd) Run(ctx context.Context, cli *CLI) error {
 	if err != nil {
 		return err
 	}
-	rows, err := collectOutdated(ctx, cli, p, c.Patterns, rep, cli.Jobs)
+	rows, err := collectOutdated(ctx, p, c.Patterns, rep, registryClient(cli, p), cli.Jobs)
 	if err != nil {
 		return err
 	}
@@ -120,9 +120,8 @@ func (c *OutdatedCmd) Run(ctx context.Context, cli *CLI) error {
 	return t.Render(os.Stdout)
 }
 
-func collectOutdated(ctx context.Context, cli *CLI, p *project.Project, patterns []string, rep *ui.Reporter, jobs int) ([]outdatedRow, error) {
-	reg := registryClient(cli, p)
-	resolver := source.New(reg, fetch.Client())
+func collectOutdated(ctx context.Context, p *project.Project, patterns []string, rep *ui.Reporter, reg *registry.Client, jobs int) ([]outdatedRow, error) {
+	resolver := source.New(reg, cmp.Or(reg.HTTP, fetch.Client()))
 	logger, _ := resolver.(source.ChangeLogger)
 	ropts := source.ResolveOpts{Rel: p.Rel, LTSRel: project.LTSRel(p.MWVersion), MWVer: p.MWVersion}
 

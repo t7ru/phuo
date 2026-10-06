@@ -65,6 +65,7 @@ type Options struct {
 	NoSave       bool
 	BaseURL      string
 	Jobs         int
+	Registry     *registry.Client
 	// skip writing phuo.json/lock since the caller owns that
 	// revert's cleanup must not rotate its own undo point
 	SkipSave bool
@@ -233,14 +234,17 @@ func (pl *Plan) applyInstall(ctx context.Context, reporter *ui.Reporter) (Summar
 		reporter.Warn("running as root! phuo will keep existing packages' owners while new ones inherit the parent's")
 	}
 
-	reg := &registry.Client{
-		HTTP:     fetch.Client(),
-		BaseURL:  cmp.Or(pl.opts.BaseURL, pl.p.Manifest.Registry),
-		CacheDir: pl.p.CacheDir,
-		Offline:  pl.opts.Offline,
-		NoCache:  pl.opts.NoCache,
+	reg := pl.opts.Registry
+	if reg == nil {
+		reg = &registry.Client{
+			HTTP:     fetch.Client(),
+			BaseURL:  cmp.Or(pl.opts.BaseURL, pl.p.Manifest.Registry),
+			CacheDir: pl.p.CacheDir,
+			Offline:  pl.opts.Offline,
+			NoCache:  pl.opts.NoCache,
+		}
 	}
-	resolver := source.New(reg, fetch.Client())
+	resolver := source.New(reg, cmp.Or(reg.HTTP, fetch.Client()))
 	ropts := source.ResolveOpts{
 		Rel: pl.p.Rel, LTSRel: project.LTSRel(pl.p.MWVersion), MWVer: pl.p.MWVersion,
 		Skin: pl.opts.Skin, Git: pl.opts.Git, Full: pl.opts.Full,

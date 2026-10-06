@@ -220,8 +220,9 @@ func (c *UpdateCmd) Run(ctx context.Context, cli *CLI) error {
 		return err
 	}
 	var specs []spec.Spec
+	reg := registryClient(cli, p)
 	if c.Interactive {
-		rows, err := collectOutdated(ctx, cli, p, c.Names, rep, cli.Jobs)
+		rows, err := collectOutdated(ctx, p, c.Names, rep, reg, cli.Jobs)
 		if err != nil {
 			return err
 		}
@@ -257,7 +258,7 @@ func (c *UpdateCmd) Run(ctx context.Context, cli *CLI) error {
 	}
 	pl, err := installer.NewPlan(p, specs, nil, installer.Options{
 		DryRun: c.DryRun, Update: true, L10n: c.L10n,
-		NoCache: cli.NoCache, Offline: cli.Offline, Jobs: cli.Jobs,
+		NoCache: cli.NoCache, Offline: cli.Offline, Registry: reg, Jobs: cli.Jobs,
 		Ask: asker(cli),
 	})
 	if err != nil {
