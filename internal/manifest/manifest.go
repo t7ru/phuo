@@ -14,13 +14,28 @@ import (
 	json "encoding/json/v2"
 )
 
+type Authors []string
+
+func (a *Authors) UnmarshalJSON(b []byte) error {
+	if err := json.Unmarshal(b, (*[]string)(a)); err == nil {
+		return nil
+	}
+	var one string
+	if err := json.Unmarshal(b, &one); err != nil {
+		return err
+	}
+	*a = Authors{one}
+	return nil
+}
+
 type Manifest struct {
-	Name            string `json:"name"`
-	Version         string `json:"version"`
-	Type            string `json:"type"`
-	URL             string `json:"url"`
-	License         string `json:"license-name"`
-	ManifestVersion int    `json:"manifest_version"`
+	Name            string  `json:"name"`
+	Version         string  `json:"version"`
+	Type            string  `json:"type"`
+	URL             string  `json:"url"`
+	License         string  `json:"license-name"`
+	Author          Authors `json:"author"`
+	ManifestVersion int     `json:"manifest_version"`
 	Requires        struct {
 		MediaWiki  string            `json:"MediaWiki"`
 		Platform   map[string]any    `json:"platform"`

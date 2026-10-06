@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -40,6 +41,16 @@ type Policy struct {
 	Status         string
 	Description    string
 	NeedsUpdatePHP bool
+	Author         string
+	Maintainer     string
+	License        string
+	MediaWiki      string
+	PHP            string
+	Phabricator    string
+	Readme         string
+	Changelog      string
+	Composer       string
+	Types          []string
 }
 
 type SearchHit struct {
@@ -214,17 +225,29 @@ func (c *Client) Snapshots(ctx context.Context) ([]string, error) {
 }
 
 var (
-	rePolicy = regexp.MustCompile(`(?i)\|\s*compatibility policy\s*=\s*(rel|master|ltsrel|main)`)
-	reStatus = regexp.MustCompile(`(?i)\|\s*status\s*=\s*([^\n|{]+)`)
-	reDesc   = regexp.MustCompile(`(?i)\|\s*description\s*=\s*([^\n|{]+)`)
-	reUpdate = regexp.MustCompile(`(?i)\|\s*needs-updatephp\s*=\s*yes\b`)
-	reTag    = regexp.MustCompile(`<[^>]*>`)
+	rePolicy     = regexp.MustCompile(`(?i)\|\s*compatibility policy\s*=\s*(rel|master|ltsrel|main)`)
+	reStatus     = regexp.MustCompile(`(?i)\|\s*status\s*=\s*([^\n|{}<]+)`)
+	reDesc       = regexp.MustCompile(`(?i)\|\s*description\s*=\s*([^\n|{}]+)`)
+	reAuthor     = regexp.MustCompile(`(?i)\|\s*author\s*=\s*((?:\[\[[^\]]*\]\]|[^\n|{}<])+)`)
+	reMaintainer = regexp.MustCompile(`(?i)\|\s*maintainer\s*=\s*((?:\[\[[^\]]*\]\]|[^\n|{}<])+)`)
+	reLicense    = regexp.MustCompile(`(?i)\|\s*license\s*=\s*([^\n|{}<]+)`)
+	reMediaWiki  = regexp.MustCompile(`(?i)\|\s*mediawiki\s*=\s*([^\n|{}<]+)`)
+	rePHP        = regexp.MustCompile(`(?i)\|\s*php\s*=\s*([^\n|{}<]+)`)
+	rePhab       = regexp.MustCompile(`(?i)\|\s*phabricator\s*=\s*([^\n|{}<]+)`)
+	reReadme     = regexp.MustCompile(`(?i)\|\s*readme\s*=\s*([^\n|{}<]+)`)
+	reChangelog  = regexp.MustCompile(`(?i)\|\s*changelog\s*=\s*([^\n|{}<]+)`)
+	reComposer   = regexp.MustCompile(`(?i)\|\s*composer\s*=\s*([^\n|{}<]+)`)
+	reTypes      = regexp.MustCompile(`(?i)\|\s*type\d?\s*=\s*([^\n|{}<]+)`)
+	reUpdate     = regexp.MustCompile(`(?i)\|\s*needs-updatephp\s*=\s*yes\b`)
+	reTag        = regexp.MustCompile(`<[^>]*>`)
+	reLink       = regexp.MustCompile(`\[\[(?:[^\]|]*\|)?([^\]]*)\]\]`)
 )
 
 // descriptions carry <translate>/<!--T:n-->
 // from that stupid i18n extension
 // while search snippets carry HTML
 func plain(s string) string {
+	s = reLink.ReplaceAllString(s, "$1")
 	return strings.Join(strings.Fields(html.UnescapeString(reTag.ReplaceAllString(s, ""))), " ")
 }
 
@@ -338,14 +361,31 @@ func parsePolicy(wikitext string) Policy {
 	if m := rePolicy.FindStringSubmatch(wikitext); m != nil {
 		p.Kind = strings.ToLower(m[1])
 	}
-	if m := reStatus.FindStringSubmatch(wikitext); m != nil {
-		p.Status = strings.TrimSpace(m[1])
-	}
-	if m := reDesc.FindStringSubmatch(wikitext); m != nil {
-		p.Description = plain(m[1])
-	}
+	p.Status = firstField(wikitext, reStatus)
+	p.Description = firstField(wikitext, reDesc)
+	p.Author = firstField(wikitext, reAuthor)
+	p.Maintainer = firstField(wikitext, reMaintainer)
+	p.License = firstField(wikitext, reLicense)
+	p.MediaWiki = firstField(wikitext, reMediaWiki)
+	p.PHP = firstField(wikitext, rePHP)
+	p.Phabricator = firstField(wikitext, rePhab)
+	p.Readme = firstField(wikitext, reReadme)
+	p.Changelog = firstField(wikitext, reChangelog)
+	p.Composer = firstField(wikitext, reComposer)
 	p.NeedsUpdatePHP = reUpdate.MatchString(wikitext)
+	for _, m := range reTypes.FindAllStringSubmatch(wikitext, -1) {
+		if t := plain(m[1]); t != "" && !slices.Contains(p.Types, t) {
+			p.Types = append(p.Types, t)
+		}
+	}
 	return p
+}
+
+func firstField(wikitext string, re *regexp.Regexp) string {
+	if m := re.FindStringSubmatch(wikitext); m != nil {
+		return plain(m[1])
+	}
+	return ""
 }
 
 func (c *Client) Search(ctx context.Context, q string) ([]SearchHit, error) {
