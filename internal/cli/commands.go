@@ -119,7 +119,7 @@ func (c *RemoveCmd) Run(ctx context.Context, cli *CLI) error {
 }
 
 type EnableCmd struct {
-	Names []string `arg:"" optional:"" name:"name" predictor:"installed" help:"Packages to enable (their requirements come along); omit to pick."`
+	Names []string `arg:"" optional:"" name:"name" predictor:"installed" help:"Packages or glob patterns to enable (requirements come along); omit to pick."`
 }
 
 func (c *EnableCmd) Run(ctx context.Context, cli *CLI) error {
@@ -127,7 +127,7 @@ func (c *EnableCmd) Run(ctx context.Context, cli *CLI) error {
 }
 
 type DisableCmd struct {
-	Names []string `arg:"" optional:"" name:"name" predictor:"installed" help:"Packages to disable; omit to pick."`
+	Names []string `arg:"" optional:"" name:"name" predictor:"installed" help:"Packages or glob patterns to disable; omit to pick."`
 }
 
 func (c *DisableCmd) Run(ctx context.Context, cli *CLI) error {
@@ -152,11 +152,36 @@ func setLoad(ctx context.Context, cli *CLI, cmd string, names []string, on bool)
 			return err
 		}
 	}
+	if names, err = expandNames(p, names); err != nil {
+		return err
+	}
 	pl, err := installer.NewPlan(p, nil, nil, installer.Options{Ask: asker(cli)})
 	if err != nil {
 		return err
 	}
 	return pl.SetLoad(ctx, rep, names, on)
+}
+
+func expandNames(p *project.Project, names []string) ([]string, error) {
+	var out []string
+	for _, n := range names {
+		if !strings.ContainsAny(n, "*?[") {
+			out = append(out, n)
+			continue
+		}
+		before := len(out)
+		pat := []string{n}
+		for key := range p.Lock.Packages {
+			if nameMatches(keyName(key), pat) {
+				out = append(out, key)
+			}
+		}
+		if len(out) == before {
+			return nil, userErr(fmt.Sprintf("no packages match %q", n))
+		}
+	}
+	slices.Sort(out)
+	return slices.Compact(out), nil
 }
 
 type InstallCmd struct {
