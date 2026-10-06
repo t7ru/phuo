@@ -1348,7 +1348,7 @@ func (pl *Plan) SetLoad(ctx context.Context, reporter *ui.Reporter, names []stri
 			}
 		}
 		for _, key := range keys {
-			if !off(key) {
+			if f.Outside.Has(key) || f.InBlock.Has(key) {
 				reporter.Info("%s is already enabled", keyName(key))
 				continue
 			}
