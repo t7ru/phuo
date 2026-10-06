@@ -138,14 +138,14 @@ func latestRelease(ctx context.Context) (ghRelease, error) {
 		return ghRelease{}, userErr("no phuo releases published")
 	}
 	if res.StatusCode != http.StatusOK {
-		return ghRelease{}, fmt.Errorf("github releases: HTTP %d", res.StatusCode)
+		return ghRelease{}, fmt.Errorf("GitHub releases: HTTP %d", res.StatusCode)
 	}
 	var rel ghRelease
 	if err := json.UnmarshalRead(res.Body, &rel); err != nil {
 		return ghRelease{}, err
 	}
 	if rel.TagName == "" {
-		return ghRelease{}, fmt.Errorf("github releases: missing tag")
+		return ghRelease{}, fmt.Errorf("GitHub releases: missing tag")
 	}
 	return rel, nil
 }

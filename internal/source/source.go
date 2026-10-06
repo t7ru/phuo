@@ -676,7 +676,7 @@ func (r *resolver) gitilesLog(ctx context.Context, source, from, to string) ([]C
 
 func (r *resolver) githubCompare(ctx context.Context, repo, from, to string) ([]Commit, error) {
 	if r.ghLimited.Load() {
-		return nil, fmt.Errorf("GitHub API rate limited! You may want to set GITHUB_TOKEN or GH_TOKEN")
+		return nil, fmt.Errorf("GitHub API rate limited! you may want to set GITHUB_TOKEN or GH_TOKEN")
 	}
 	u := "https://api.github.com/repos/" + repo + "/compare/" + from + "..." + to
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
@@ -690,7 +690,7 @@ func (r *resolver) githubCompare(ctx context.Context, repo, from, to string) ([]
 	defer res.Body.Close()
 	if res.StatusCode == http.StatusForbidden || res.StatusCode == http.StatusTooManyRequests {
 		r.ghLimited.Store(true)
-		return nil, fmt.Errorf("GitHub API rate limited! You may want to set GITHUB_TOKEN or GH_TOKEN")
+		return nil, fmt.Errorf("GitHub API rate limited! you may want to set GITHUB_TOKEN or GH_TOKEN")
 	}
 	if res.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("%s: HTTP %d", u, res.StatusCode)
