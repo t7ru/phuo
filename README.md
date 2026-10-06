@@ -76,7 +76,7 @@ phuo outdated                          # list packages that can move forward
 phuo rel                               # show the release branch for this wiki
 phuo rel REL1_43                       # override it and run phuo update afterward
 phuo ls                                # what's installed
-phuo info MobileFrontend               # registry page for one package
+phuo info MobileFrontend               # registry and local metadata for a package
 phuo search echo                       # search Extension and Skin pages
 phuo why Echo                          # why a dependency is here
 phuo changelog Echo                    # commits between the installed ref and the newest
