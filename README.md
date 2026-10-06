@@ -64,6 +64,7 @@ phuo enable Cite                       # load it from LocalSettings.php
 phuo disable Cite                      # stays on disk, dropped from LocalSettings.php
 phuo install                           # install what phuo.lock records
 phuo install --frozen-lockfile         # stop if phuo.json and the lock disagree
+phuo fetch                             # download locked archives into the cache
 phuo update                            # move everything to the newest ref
 phuo update -i                         # pick what to update
 phuo revert                            # undo the last change
