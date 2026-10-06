@@ -205,7 +205,8 @@ func Download(ctx context.Context, url, cacheDir string, w io.Writer) (string, e
 	}
 	mw := io.MultiWriter(writers...)
 
-	// a dropped body resumes where it stopped: hash and part keep accumulating
+	// a dropped body resumes where it stopped
+	// with hash and part keep accumulating
 	var received int64
 	for attempt := 0; ; attempt++ {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -239,7 +240,7 @@ func Download(ctx context.Context, url, cacheDir string, w io.Writer) (string, e
 		if err == nil {
 			break
 		}
-		// n == 0: the sink died but not the network
+		// the sink died but not the network
 		if n == 0 || attempt >= retryAttempts-1 || ctx.Err() != nil {
 			return "", failDownload(part, partPath, err)
 		}
