@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
-	"maps"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -649,12 +648,16 @@ func (pl *Plan) prefetch(ctx context.Context, reg *registry.Client, round []*wor
 	if len(exts)+len(skins) == 0 {
 		return nil
 	}
-	ex, sk, err := reg.Branches(ctx, exts, skins)
-	if err != nil {
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(func() error {
+		_, _, err := reg.Branches(gctx, exts, skins)
 		return err
-	}
-	_, err = reg.Policies(ctx, slices.Collect(maps.Keys(ex)), slices.Collect(maps.Keys(sk)))
-	return err
+	})
+	g.Go(func() error {
+		_, err := reg.Policies(gctx, exts, skins)
+		return err
+	})
+	return g.Wait()
 }
 
 func (pl *Plan) prepareItem(ctx context.Context, it *workItem, resolver source.Resolver, ropts source.ResolveOpts, cacheDir string) error {

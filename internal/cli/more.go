@@ -160,10 +160,16 @@ func collectOutdated(ctx context.Context, cli *CLI, p *project.Project, patterns
 		if rep != nil {
 			rep.Progress("fetching registry data for %d packages...", len(keys))
 		}
-		if _, _, err := reg.Branches(ctx, exts, skins); err != nil {
-			return nil, err
-		}
-		if _, err := reg.Policies(ctx, exts, skins); err != nil {
+		g, gctx := errgroup.WithContext(ctx)
+		g.Go(func() error {
+			_, _, err := reg.Branches(gctx, exts, skins)
+			return err
+		})
+		g.Go(func() error {
+			_, err := reg.Policies(gctx, exts, skins)
+			return err
+		})
+		if err := g.Wait(); err != nil {
 			return nil, err
 		}
 	}
