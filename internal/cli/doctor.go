@@ -1,9 +1,11 @@
 package cli
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -62,8 +64,22 @@ func (c *DoctorCmd) Run(ctx context.Context, cli *CLI) error {
 		}
 	}
 
-	for key := range p.Lock.Packages {
+	missing := make(map[string]bool, len(p.Lock.Packages))
+	for key, lp := range p.Lock.Packages {
 		dir := packageDir(p, key)
+		s, stamped := project.ReadStamp(dir)
+		if stamped {
+			if s.SHA != lp.SHA || s.Ref != lp.Ref {
+				problem("%s: installed %s (%s), lock records %s (%s); run phuo install",
+					key, cmp.Or(shortSHA(s.SHA), "unknown"), cmp.Or(s.Ref, "-"),
+					cmp.Or(shortSHA(lp.SHA), "unknown"), cmp.Or(lp.Ref, "-"))
+			}
+		} else if _, err := os.Stat(dir); errors.Is(err, fs.ErrNotExist) {
+			problem("%s: in lock but not installed; run phuo install", key)
+			missing[key] = true
+		} else {
+			rep.Warn("%s: no install record; run phuo install", key)
+		}
 		man, _, err := manifest.Read(dir)
 		if err != nil {
 			continue
@@ -106,6 +122,9 @@ func (c *DoctorCmd) Run(ctx context.Context, cli *CLI) error {
 				} else {
 					for _, l := range []localsettings.Loads{ls.Outside, ls.InBlock} {
 						for _, key := range l.Keys() {
+							if missing[key] {
+								continue
+							}
 							if _, err := os.Stat(packageDir(p, key)); err != nil {
 								problem("%s: loaded but missing", key)
 							}
@@ -119,7 +138,9 @@ func (c *DoctorCmd) Run(ctx context.Context, cli *CLI) error {
 							continue
 						}
 						if !off(key) {
-							problem("%s: installed but not loaded", key)
+							if !missing[key] {
+								problem("%s: installed but not loaded", key)
+							}
 							continue
 						}
 						typ, name, _ := strings.Cut(key, "/")
