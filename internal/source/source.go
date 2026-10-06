@@ -245,8 +245,10 @@ func selectRef(name, pinned string, opts ResolveOpts, policy string, refs map[st
 				if policy == "ltsrel" {
 					rec = opts.LTSRel
 				}
-				hint = fmt.Sprintf("%s follows the %s policy; its maintainer recommends %s (phuo add %s@%s)",
-					name, policy, rec, name, rec)
+				if rec != "" && rec != opts.Rel {
+					hint = fmt.Sprintf("%s follows the %s policy; its maintainer recommends %s (phuo add %s@%s)",
+						name, policy, rec, name, rec)
+				}
 			}
 			return opts.Rel, hint, nil
 		}
