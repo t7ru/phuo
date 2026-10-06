@@ -389,45 +389,69 @@ func (c *InfoCmd) Run(ctx context.Context, cli *CLI) error {
 	if rest, ok := strings.CutPrefix(name, "skin:"); ok {
 		name, skin = rest, true
 	}
-	var exts, skins []string
-	if skin {
-		skins = []string{name}
-	} else {
-		exts = []string{name}
-	}
-	exBr, skBr, err := reg.Branches(ctx, exts, skins)
-	if err != nil {
-		return err
-	}
-	br, ok := exBr[name]
 	typ := "extensions"
-	if !ok {
-		br, ok = skBr[name]
+	if skin {
 		typ = "skins"
 	}
-	if !ok && !skin {
-		exBr2, skBr2, err := reg.Branches(ctx, nil, []string{name})
+	key := typ + "/" + name
+	lp, installed := p.Lock.Packages[key]
+	if !installed && !skin {
+		if l, ok := p.Lock.Packages["skins/"+name]; ok {
+			typ, key, lp, installed = "skins", "skins/"+name, l, true
+		}
+	}
+
+	var br registry.Branches
+	var pol registry.Policy
+	found := false
+	useReg := !installed
+	if installed {
+		sp, err := specForKey(p, key)
 		if err != nil {
 			return err
 		}
-		_ = exBr2
-		if b, ok2 := skBr2[name]; ok2 {
-			br, ok, typ = b, true, "skins"
+		useReg = sp.Kind == spec.Registry
+	}
+	if useReg {
+		exts, skins := []string{name}, []string{name}
+		if typ == "skins" {
+			exts = nil
+		} else if installed {
+			skins = nil
+		}
+		var exBr, skBr map[string]registry.Branches
+		var pols map[string]registry.Policy
+		var brErr, polErr error
+		var wg sync.WaitGroup
+		wg.Go(func() { exBr, skBr, brErr = reg.Branches(ctx, exts, skins) })
+		wg.Go(func() { pols, polErr = reg.Policies(ctx, exts, skins) })
+		wg.Wait()
+		if brErr != nil {
+			return brErr
+		}
+		br, found = exBr[name]
+		if !found {
+			br, found = skBr[name]
+			if found {
+				typ = "skins"
+			}
+		}
+		if found {
+			key = typ + "/" + name
+			// a policy failure only matters once the package is found
+			if polErr != nil {
+				return polErr
+			}
+			pol = pols[key]
+		} else if !installed {
+			msg := fmt.Sprintf("Unknown extension/skin %q", c.Name)
+			if sug := reg.Suggest(name); len(sug) > 0 {
+				msg += fmt.Sprintf(". Did you mean %s?", sug[0])
+			}
+			return userErr(msg)
 		}
 	}
-	if !ok {
-		return userErr(fmt.Sprintf("Unknown extension/skin %q", c.Name))
-	}
-	key := typ + "/" + name
-	pols, err := reg.Policies(ctx, pickNames(typ, "extensions", name), pickNames(typ, "skins", name))
-	if err != nil {
-		return err
-	}
-	pol := pols[key]
-	kind := pol.Kind
-	if kind == "" {
-		kind = "rel"
-	}
+	kind := cmp.Or(pol.Kind, lp.Policy, "rel")
 	type infoRequires struct {
 		MediaWiki  string            `json:"MediaWiki,omitzero"`
 		Platform   map[string]any    `json:"platform,omitzero"`
@@ -568,9 +592,10 @@ func (c *InfoCmd) Run(ctx context.Context, cli *CLI) error {
 		}
 		return &infoRequires{MediaWiki: mediawiki, Platform: platform, Extensions: exts, Skins: skins}
 	}
+	src := cmp.Or(strings.TrimSuffix(br.Source, ".git"), strings.TrimSuffix(lp.Source, ".git"))
 	out := infoOut{
 		Name: name, Type: typ, Description: pol.Description, Status: pol.Status,
-		Policy: kind, Source: strings.TrimSuffix(br.Source, ".git"), Refs: map[string]string{},
+		Policy: kind, Source: src, Refs: map[string]string{},
 		Implementation: strings.Join(pol.Types, ", "),
 		Readme:         httpURL(pol.Readme),
 		Changelog:      httpURL(pol.Changelog),
@@ -583,7 +608,7 @@ func (c *InfoCmd) Run(ctx context.Context, cli *CLI) error {
 	if pol.Phabricator != "" {
 		out.Issues = "https://phabricator.wikimedia.org/tag/" + strings.ToLower(pol.Phabricator) + "/"
 	}
-	if r := p.Manifest.Registry; r == "" || strings.Contains(r, "mediawiki.org") {
+	if r := p.Manifest.Registry; found && (r == "" || strings.Contains(r, "mediawiki.org")) {
 		ns := "Extension:"
 		if typ == "skins" {
 			ns = "Skin:"
@@ -593,7 +618,7 @@ func (c *InfoCmd) Run(ctx context.Context, cli *CLI) error {
 	if pol.Author != "" {
 		out.Authors = []string{pol.Author}
 	}
-	if lp, ok := p.Lock.Packages[key]; ok {
+	if installed {
 		out.Installed = true
 		out.Version = lp.Version
 		out.SHA = shortSHA(lp.SHA)
@@ -631,12 +656,10 @@ func (c *InfoCmd) Run(ctx context.Context, cli *CLI) error {
 			}
 		}
 	}
-	refs := make([]string, 0, len(br.Refs))
 	for ref, url := range br.Refs {
-		refs = append(refs, ref)
 		out.Refs[ref] = source.ArchiveSHA(url)
 	}
-	slices.Sort(refs)
+	refs := slices.Sorted(maps.Keys(br.Refs))
 	if c.Field != "" {
 		v, err := infoField(out, c.Field)
 		if err != nil {
@@ -731,18 +754,20 @@ func (c *InfoCmd) Run(ctx context.Context, cli *CLI) error {
 	} else {
 		rep.Info("installed: no")
 	}
-	rep.Info("refs:")
-	width := 0
-	for _, ref := range refs {
-		if out.Refs[ref] != "" && utf8.RuneCountInString(ref) > width {
-			width = utf8.RuneCountInString(ref)
+	if len(refs) > 0 {
+		rep.Info("refs:")
+		width := 0
+		for _, ref := range refs {
+			if out.Refs[ref] != "" && utf8.RuneCountInString(ref) > width {
+				width = utf8.RuneCountInString(ref)
+			}
 		}
-	}
-	for _, ref := range refs {
-		if sha := out.Refs[ref]; sha != "" {
-			rep.Info("  %-*s  %s", width, ref, sha)
-		} else {
-			rep.Info("  %s", ref)
+		for _, ref := range refs {
+			if sha := out.Refs[ref]; sha != "" {
+				rep.Info("  %-*s  %s", width, ref, sha)
+			} else {
+				rep.Info("  %s", ref)
+			}
 		}
 	}
 	return nil
@@ -753,13 +778,6 @@ func httpURL(v string) string {
 		return v
 	}
 	return ""
-}
-
-func pickNames(typ, want, name string) []string {
-	if typ == want {
-		return []string{name}
-	}
-	return nil
 }
 
 type SearchCmd struct {
