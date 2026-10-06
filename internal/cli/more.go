@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"maps"
 	"os"
 	"path"
 	"path/filepath"
@@ -26,6 +27,7 @@ import (
 	"github.com/t7ru/phuo/internal/fetch"
 	"github.com/t7ru/phuo/internal/localsettings"
 	"github.com/t7ru/phuo/internal/manifest"
+	"github.com/t7ru/phuo/internal/mw"
 	"github.com/t7ru/phuo/internal/project"
 	"github.com/t7ru/phuo/internal/registry"
 	"github.com/t7ru/phuo/internal/source"
@@ -290,15 +292,7 @@ func (c *LsCmd) Run(ctx context.Context, cli *CLI) error {
 	if cli.JSON {
 		return json.MarshalWrite(os.Stdout, p.Lock.Packages, json.Deterministic(true))
 	}
-	var ls *localsettings.File
-	if lsPath, ok := p.Manifest.LocalSettings.Value("LocalSettings.php"); ok {
-		if !filepath.IsAbs(lsPath) {
-			lsPath = filepath.Join(p.Root, lsPath)
-		}
-		if f, err := localsettings.Scan(lsPath); err == nil {
-			ls = &f
-		}
-	}
+	ls := scanLocalSettings(p)
 	t := ui.Table{
 		Header:  []string{"Name", "Type", "Ref", "SHA", "Version", "Policy", "Spec", "Enabled"},
 		Unicode: true,
@@ -308,19 +302,6 @@ func (c *LsCmd) Run(ctx context.Context, cli *CLI) error {
 }
 
 func lsRows(p *project.Project, all bool, ls *localsettings.File) [][]string {
-	enabled := func(key string) string {
-		switch {
-		case ls == nil:
-			return "?"
-		case ls.Outside.Has(key), ls.InBlock.Has(key):
-			return "yes"
-		case ls.Disabled.Has(key):
-			return "commented"
-		case slices.Contains(p.Manifest.Disabled, key):
-			return "disabled"
-		}
-		return "no"
-	}
 	keys := make([]string, 0, len(p.Lock.Packages))
 	for key, pkg := range p.Lock.Packages {
 		if all || pkg.Spec != "dep" {
@@ -339,7 +320,7 @@ func lsRows(p *project.Project, all bool, ls *localsettings.File) [][]string {
 		pkg := p.Lock.Packages[key]
 		rows = append(rows, []string{
 			indent + keyName(key), keyType(key), pkg.Ref, shortSHA(pkg.SHA),
-			pkg.Version, pkg.Policy, pkg.Spec, enabled(key),
+			pkg.Version, pkg.Policy, pkg.Spec, loadState(p, ls, key),
 		})
 		if all {
 			return
@@ -363,9 +344,38 @@ func lsRows(p *project.Project, all bool, ls *localsettings.File) [][]string {
 	return rows
 }
 
+func scanLocalSettings(p *project.Project) *localsettings.File {
+	lsPath, ok := p.Manifest.LocalSettings.Value("LocalSettings.php")
+	if !ok {
+		return nil
+	}
+	if !filepath.IsAbs(lsPath) {
+		lsPath = filepath.Join(p.Root, lsPath)
+	}
+	f, err := localsettings.Scan(lsPath)
+	if err != nil {
+		return nil
+	}
+	return &f
+}
+
+func loadState(p *project.Project, ls *localsettings.File, key string) string {
+	switch {
+	case ls == nil:
+		return "?"
+	case ls.Outside.Has(key), ls.InBlock.Has(key):
+		return "yes"
+	case ls.Disabled.Has(key):
+		return "commented"
+	case slices.Contains(p.Manifest.Disabled, key):
+		return "disabled"
+	}
+	return "no"
+}
+
 type InfoCmd struct {
 	Name  string `arg:"" name:"name" help:"Package name."`
-	Field string `arg:"" optional:"" name:"field" help:"Field to print (e.g. version, license, requires, refs)."`
+	Field string `arg:"" optional:"" name:"field" help:"Field to print (e.g. page, author, requires, refs)."`
 }
 
 func (c *InfoCmd) Run(ctx context.Context, cli *CLI) error {
@@ -408,33 +418,51 @@ func (c *InfoCmd) Run(ctx context.Context, cli *CLI) error {
 	if !ok {
 		return userErr(fmt.Sprintf("Unknown extension/skin %q", c.Name))
 	}
+	key := typ + "/" + name
 	pols, err := reg.Policies(ctx, pickNames(typ, "extensions", name), pickNames(typ, "skins", name))
 	if err != nil {
 		return err
 	}
-	pol := pols[typ+"/"+name]
+	pol := pols[key]
 	kind := pol.Kind
 	if kind == "" {
 		kind = "rel"
 	}
 	type infoRequires struct {
 		MediaWiki  string            `json:"MediaWiki,omitzero"`
+		Platform   map[string]any    `json:"platform,omitzero"`
 		Extensions map[string]string `json:"extensions,omitzero"`
 		Skins      map[string]string `json:"skins,omitzero"`
 	}
 	type infoOut struct {
-		Name        string            `json:"name"`
-		Type        string            `json:"type"`
-		Description string            `json:"description,omitzero"`
-		Status      string            `json:"status,omitzero"`
-		Policy      string            `json:"policy"`
-		URL         string            `json:"url,omitzero"`
-		Version     string            `json:"version,omitzero"`
-		License     string            `json:"license,omitzero"`
-		Requires    *infoRequires     `json:"requires,omitzero"`
-		Installed   bool              `json:"installed"`
-		SHA         string            `json:"sha,omitzero"`
-		Refs        map[string]string `json:"refs"`
+		Name           string            `json:"name"`
+		Type           string            `json:"type"`
+		Implementation string            `json:"implementation,omitzero"`
+		Description    string            `json:"description,omitzero"`
+		Status         string            `json:"status,omitzero"`
+		Policy         string            `json:"policy"`
+		Page           string            `json:"page,omitzero"`
+		Homepage       string            `json:"homepage,omitzero"`
+		Source         string            `json:"source,omitzero"`
+		Issues         string            `json:"issues,omitzero"`
+		Readme         string            `json:"readme,omitzero"`
+		Changelog      string            `json:"changelog,omitzero"`
+		Composer       string            `json:"composer,omitzero"`
+		Authors        []string          `json:"authors,omitzero"`
+		Maintainer     string            `json:"maintainer,omitzero"`
+		License        string            `json:"license,omitzero"`
+		Version        string            `json:"version,omitzero"`
+		Database       bool              `json:"database,omitzero"`
+		PHP            string            `json:"php,omitzero"`
+		Unmet          []string          `json:"unmet,omitzero"`
+		Requires       *infoRequires     `json:"requires,omitzero"`
+		Suggests       *infoRequires     `json:"suggests,omitzero"`
+		Installed      bool              `json:"installed"`
+		Enabled        string            `json:"enabled,omitzero"`
+		SHA            string            `json:"sha,omitzero"`
+		Latest         string            `json:"latest,omitzero"`
+		Ref            string            `json:"ref,omitzero"`
+		Refs           map[string]string `json:"refs"`
 	}
 	infoField := func(out infoOut, field string) (any, error) {
 		head, rest, _ := strings.Cut(field, ".")
@@ -443,22 +471,52 @@ func (c *InfoCmd) Run(ctx context.Context, cli *CLI) error {
 			return out.Name, nil
 		case "type":
 			return out.Type, nil
+		case "implementation":
+			return out.Implementation, nil
 		case "description":
 			return out.Description, nil
 		case "status":
 			return out.Status, nil
 		case "policy":
 			return out.Policy, nil
-		case "url":
-			return out.URL, nil
+		case "page":
+			return out.Page, nil
+		case "homepage":
+			return out.Homepage, nil
+		case "source":
+			return out.Source, nil
+		case "issues":
+			return out.Issues, nil
+		case "readme":
+			return out.Readme, nil
+		case "changelog":
+			return out.Changelog, nil
+		case "composer":
+			return out.Composer, nil
+		case "authors":
+			return out.Authors, nil
+		case "maintainer":
+			return out.Maintainer, nil
 		case "version":
 			return out.Version, nil
 		case "license":
 			return out.License, nil
+		case "database":
+			return out.Database, nil
+		case "php":
+			return out.PHP, nil
+		case "unmet":
+			return out.Unmet, nil
 		case "installed":
 			return out.Installed, nil
+		case "enabled":
+			return out.Enabled, nil
 		case "sha":
 			return out.SHA, nil
+		case "latest":
+			return out.Latest, nil
+		case "ref":
+			return out.Ref, nil
 		case "requires":
 			req := out.Requires
 			if req == nil {
@@ -469,10 +527,25 @@ func (c *InfoCmd) Run(ctx context.Context, cli *CLI) error {
 				return req, nil
 			case "mediawiki":
 				return req.MediaWiki, nil
+			case "platform":
+				return req.Platform, nil
 			case "extensions":
 				return req.Extensions, nil
 			case "skins":
 				return req.Skins, nil
+			}
+		case "suggests":
+			sug := out.Suggests
+			if sug == nil {
+				sug = &infoRequires{}
+			}
+			switch strings.ToLower(rest) {
+			case "":
+				return sug, nil
+			case "extensions":
+				return sug.Extensions, nil
+			case "skins":
+				return sug.Skins, nil
 			}
 		case "refs":
 			if rest == "" {
@@ -485,23 +558,76 @@ func (c *InfoCmd) Run(ctx context.Context, cli *CLI) error {
 		}
 		return nil, userErr(fmt.Sprintf("unknown field %q", field))
 	}
+	var wikiPlatform map[string]any
+	if pol.PHP != "" {
+		wikiPlatform = map[string]any{"php": pol.PHP}
+	}
+	requires := func(mediawiki string, platform map[string]any, exts, skins map[string]string) *infoRequires {
+		if mediawiki == "" && len(platform) == 0 && len(exts) == 0 && len(skins) == 0 {
+			return nil
+		}
+		return &infoRequires{MediaWiki: mediawiki, Platform: platform, Extensions: exts, Skins: skins}
+	}
 	out := infoOut{
 		Name: name, Type: typ, Description: pol.Description, Status: pol.Status,
-		Policy: kind, URL: br.Source, Refs: map[string]string{},
+		Policy: kind, Source: strings.TrimSuffix(br.Source, ".git"), Refs: map[string]string{},
+		Implementation: strings.Join(pol.Types, ", "),
+		Readme:         httpURL(pol.Readme),
+		Changelog:      httpURL(pol.Changelog),
+		Composer:       pol.Composer,
+		Maintainer:     pol.Maintainer,
+		License:        pol.License,
+		Database:       pol.NeedsUpdatePHP,
+		Requires:       requires(pol.MediaWiki, wikiPlatform, nil, nil),
 	}
-	if lp, ok := p.Lock.Packages[typ+"/"+name]; ok {
+	if pol.Phabricator != "" {
+		out.Issues = "https://phabricator.wikimedia.org/tag/" + strings.ToLower(pol.Phabricator) + "/"
+	}
+	if r := p.Manifest.Registry; r == "" || strings.Contains(r, "mediawiki.org") {
+		ns := "Extension:"
+		if typ == "skins" {
+			ns = "Skin:"
+		}
+		out.Page = "https://www.mediawiki.org/wiki/" + ns + strings.ReplaceAll(name, " ", "_")
+	}
+	if pol.Author != "" {
+		out.Authors = []string{pol.Author}
+	}
+	if lp, ok := p.Lock.Packages[key]; ok {
 		out.Installed = true
 		out.Version = lp.Version
 		out.SHA = shortSHA(lp.SHA)
-		dir := packageDir(p, typ+"/"+name)
+		out.Ref = lp.Ref
+		out.Enabled = loadState(p, scanLocalSettings(p), key)
+		dir := packageDir(p, key)
 		if man, _, err := manifest.Read(dir); err == nil {
-			out.License = man.License
-			if man.Requires.MediaWiki != "" || len(man.Requires.Extensions) > 0 || len(man.Requires.Skins) > 0 {
-				out.Requires = &infoRequires{
-					MediaWiki:  man.Requires.MediaWiki,
-					Extensions: man.Requires.Extensions,
-					Skins:      man.Requires.Skins,
+			out.Homepage = man.URL
+			out.License = cmp.Or(man.License, out.License)
+			if len(man.Author) > 0 {
+				out.Authors = man.Author
+			}
+			if man.Type != "" {
+				out.Implementation = man.Type
+			}
+			out.Requires = requires(man.Requires.MediaWiki, man.Requires.Platform, man.Requires.Extensions, man.Requires.Skins)
+			out.Suggests = requires("", nil, man.Suggests.Extensions, man.Suggests.Skins)
+			if ok, err := manifest.HasSchemaUpdates(dir); err == nil {
+				out.Database = ok
+			}
+			if len(man.Requires.Platform) > 0 && !p.Manifest.PHP.Disabled() {
+				bin, _ := p.Manifest.PHP.Value("php")
+				php := mw.PHP{Bin: bin, Root: p.Root}
+				if php.Available() {
+					if plat, err := php.Platform(ctx); err == nil {
+						out.PHP = plat.PHP
+						out.Unmet = man.UnmetPlatform(plat.PHP, plat.Modules, plat.Abilities)
+					}
 				}
+			}
+		}
+		if lp.SHA != "" {
+			if tip := source.ArchiveSHA(br.Refs[lp.Ref]); tip != "" && !strings.HasPrefix(lp.SHA, tip) {
+				out.Latest = tip
 			}
 		}
 	}
@@ -534,36 +660,74 @@ func (c *InfoCmd) Run(ctx context.Context, cli *CLI) error {
 	}
 	rep.Info("name: %s", out.Name)
 	rep.Info("type: %s", out.Type)
-	if out.Description != "" {
-		rep.Info("description: %s", out.Description)
+	author := strings.Join(out.Authors, ", ")
+	for _, f := range []struct{ label, value string }{
+		{"implementation", out.Implementation},
+		{"description", out.Description},
+		{"status", out.Status},
+		{"policy", out.Policy},
+		{"page", out.Page},
+		{"homepage", out.Homepage},
+		{"source", out.Source},
+		{"issues", out.Issues},
+		{"readme", out.Readme},
+		{"changelog", out.Changelog},
+		{"composer", out.Composer},
+		{"author", author},
+		{"maintainer", out.Maintainer},
+		{"license", out.License},
+		{"version", out.Version},
+	} {
+		if f.value != "" {
+			rep.Info("%s: %s", f.label, f.value)
+		}
 	}
-	if out.Status != "" {
-		rep.Info("status: %s", out.Status)
+	if out.Database {
+		rep.Info("database: requires update.php")
 	}
-	rep.Info("policy: %s", out.Policy)
-	if out.URL != "" {
-		rep.Info("url: %s", out.URL)
+	deps := func(kind string, m map[string]string) {
+		for _, n := range slices.Sorted(maps.Keys(m)) {
+			rep.Info("  %s/%s: %s", kind, n, m[n])
+		}
+	}
+	if req := out.Requires; req != nil {
+		rep.Info("requires:")
+		if req.MediaWiki != "" {
+			mwReq := req.MediaWiki
+			if out.Installed {
+				if ok, err := manifest.Satisfies(mwReq, p.MWVersion); err == nil && !ok {
+					mwReq += " (incompatible with " + p.MWVersion + ")"
+				}
+			}
+			rep.Info("  MediaWiki: %s", mwReq)
+		}
+		if php, _ := req.Platform["php"].(string); php != "" {
+			if out.PHP != "" {
+				php += " (CLI " + out.PHP + ")"
+			}
+			rep.Info("  PHP: %s", php)
+		}
+		for _, msg := range out.Unmet {
+			if !strings.HasPrefix(msg, "requires PHP ") {
+				rep.Info("  platform: %s", msg)
+			}
+		}
+		deps("extensions", req.Extensions)
+		deps("skins", req.Skins)
+	}
+	if sug := out.Suggests; sug != nil {
+		rep.Info("suggests:")
+		deps("extensions", sug.Extensions)
+		deps("skins", sug.Skins)
 	}
 	if out.Installed {
-		if out.Version != "" {
-			rep.Info("version: %s", out.Version)
-		}
-		if out.License != "" {
-			rep.Info("license: %s", out.License)
-		}
-		if out.Requires != nil {
-			rep.Info("requires:")
-			if out.Requires.MediaWiki != "" {
-				rep.Info("  MediaWiki: %s", out.Requires.MediaWiki)
-			}
-			for n, c := range out.Requires.Extensions {
-				rep.Info("  extensions/%s: %s", n, c)
-			}
-			for n, c := range out.Requires.Skins {
-				rep.Info("  skins/%s: %s", n, c)
-			}
-		}
 		rep.Info("installed: yes (%s)", out.SHA)
+		if out.Enabled != "" {
+			rep.Info("enabled: %s", out.Enabled)
+		}
+		if out.Latest != "" {
+			rep.Info("update: %s (%s)", out.Latest, out.Ref)
+		}
 	} else {
 		rep.Info("installed: no")
 	}
@@ -582,6 +746,13 @@ func (c *InfoCmd) Run(ctx context.Context, cli *CLI) error {
 		}
 	}
 	return nil
+}
+
+func httpURL(v string) string {
+	if strings.HasPrefix(v, "http://") || strings.HasPrefix(v, "https://") {
+		return v
+	}
+	return ""
 }
 
 func pickNames(typ, want, name string) []string {
