@@ -85,7 +85,6 @@ phuo cache                             # print the cache directory and size
 phuo cache rm                          # delete it
 phuo upgrade                           # update this phuo install
 phuo completions bash                  # bash, zsh, fish, or powershell
-phuo pm ls                             # ls, cache, and diff under a pm prefix
 ```
 
 `phuo <command> --help` lists flags for that command.

@@ -981,12 +981,6 @@ func (c *CacheCmd) Run(ctx context.Context, cli *CLI) error {
 	}
 }
 
-type PmCmd struct {
-	Ls    LsCmd    `cmd:"" help:"List installed packages."`
-	Cache CacheCmd `cmd:"" help:"Show or clear the global cache."`
-	Diff  DiffCmd  `cmd:"" help:"Show what updating a package would change."`
-}
-
 func registryClient(cli *CLI, p *project.Project) *registry.Client {
 	return &registry.Client{
 		HTTP:     fetch.Client(),

@@ -54,5 +54,4 @@ type CLI struct {
 	Cache       CacheCmd       `cmd:"" help:"Show or clear the global cache."`
 	Upgrade     UpgradeCmd     `cmd:"" help:"Update this phuo binary."`
 	Completions CompletionsCmd `cmd:"" help:"Print shell completion scripts."`
-	Pm          PmCmd          `cmd:"" help:"Package-manager aliases (ls, cache, diff)."`
 }
