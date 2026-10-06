@@ -64,6 +64,7 @@ type Options struct {
 	Skin         bool
 	NoSave       bool
 	BaseURL      string
+	Jobs         int
 	// skip writing phuo.json/lock since the caller owns that
 	// revert's cleanup must not rotate its own undo point
 	SkipSave bool
@@ -281,7 +282,7 @@ func (pl *Plan) applyInstall(ctx context.Context, reporter *ui.Reporter) (Summar
 		}
 
 		g, gctx := errgroup.WithContext(ctx)
-		g.SetLimit(8)
+		g.SetLimit(max(cmp.Or(pl.opts.Jobs, 16), 1))
 		for _, it := range round {
 			g.Go(func() error {
 				return pl.prepareItem(gctx, it, resolver, ropts, cacheDir)

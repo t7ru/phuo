@@ -25,6 +25,7 @@ type CLI struct {
 	CacheDir   string           `name:"cache-dir" help:"Override the global cache directory." type:"path"`
 	Yes        bool             `name:"yes" short:"y" help:"Assume yes for prompts."`
 	Offline    bool             `name:"offline" help:"Fail instead of hitting the network."`
+	Jobs       int              `name:"jobs" short:"j" default:"16" help:"Max concurrent network operations."`
 	Version    kong.VersionFlag `name:"version" help:"Print version and exit."`
 
 	Init        InitCmd        `cmd:"" help:"Create phuo.json in a MediaWiki root."`

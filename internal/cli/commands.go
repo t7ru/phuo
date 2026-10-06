@@ -71,7 +71,8 @@ func (c *AddCmd) Run(ctx context.Context, cli *CLI) error {
 		Force: c.Force, DryRun: c.DryRun, NoComposer: c.NoComposer, NoLoad: c.NoLoad, Disabled: c.Disabled,
 		LockfileOnly: c.LockfileOnly, Exact: c.Exact, Git: c.Git, Full: c.Full,
 		UpdateDB: c.UpdateDB, NoCache: cli.NoCache, Offline: cli.Offline, Skin: c.Skin, NoSave: c.NoSave,
-		Ask: asker(cli),
+		Jobs: cli.Jobs,
+		Ask:  asker(cli),
 	})
 	if err != nil {
 		return err
@@ -176,7 +177,7 @@ func (c *InstallCmd) Run(ctx context.Context, cli *CLI) error {
 	}
 	pl, err := installer.NewPlan(p, specs, nil, installer.Options{
 		Force: c.Force, DryRun: c.DryRun, LockfileOnly: c.LockfileOnly, Frozen: c.FrozenLockfile,
-		NoCache: cli.NoCache, Offline: cli.Offline,
+		NoCache: cli.NoCache, Offline: cli.Offline, Jobs: cli.Jobs,
 		Ask: asker(cli),
 	})
 	if err != nil {
@@ -220,7 +221,7 @@ func (c *UpdateCmd) Run(ctx context.Context, cli *CLI) error {
 	}
 	var specs []spec.Spec
 	if c.Interactive {
-		rows, err := collectOutdated(ctx, cli, p, c.Names, rep)
+		rows, err := collectOutdated(ctx, cli, p, c.Names, rep, cli.Jobs)
 		if err != nil {
 			return err
 		}
@@ -256,7 +257,7 @@ func (c *UpdateCmd) Run(ctx context.Context, cli *CLI) error {
 	}
 	pl, err := installer.NewPlan(p, specs, nil, installer.Options{
 		DryRun: c.DryRun, Update: true, L10n: c.L10n,
-		NoCache: cli.NoCache, Offline: cli.Offline,
+		NoCache: cli.NoCache, Offline: cli.Offline, Jobs: cli.Jobs,
 		Ask: asker(cli),
 	})
 	if err != nil {
