@@ -35,6 +35,7 @@ type CLI struct {
 	Enable      EnableCmd      `cmd:"" help:"Load installed packages via LocalSettings.php."`
 	Disable     DisableCmd     `cmd:"" help:"Keep installed packages out of LocalSettings.php."`
 	Install     InstallCmd     `cmd:"" aliases:"i" help:"Install from phuo.lock."`
+	Fetch       FetchCmd       `cmd:"" help:"Download locked archives into the cache."`
 	Update      UpdateCmd      `cmd:"" aliases:"up" help:"Update packages to newest refs."`
 	Pin         PinCmd         `cmd:"" help:"Pin installed packages at their current sha."`
 	Unpin       UnpinCmd       `cmd:"" help:"Unpin installed packages."`

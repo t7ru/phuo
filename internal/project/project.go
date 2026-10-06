@@ -22,6 +22,7 @@ import (
 var (
 	ErrNoProject   = errors.New("no phuo.json found; run phuo init")
 	ErrNoMediaWiki = errors.New("not a MediaWiki root (missing includes/Defines.php or LocalSettings.php)")
+	ErrNoLock      = errors.New("no phuo.lock found; run phuo init")
 )
 
 type Project struct {
@@ -156,27 +157,38 @@ func Find(cwd string) (root string, hasPhuo bool, err error) {
 	if err != nil {
 		return "", false, err
 	}
-	for d := dir; ; {
-		if fileExists(filepath.Join(d, "phuo.json")) {
-			return d, true, nil
-		}
-		parent := filepath.Dir(d)
-		if parent == d {
-			break
-		}
-		d = parent
+	if root, ok := walkUp(dir, func(d string) bool { return fileExists(filepath.Join(d, "phuo.json")) }); ok {
+		return root, true, nil
 	}
-	for d := dir; ; {
-		if isMediaWiki(d) {
-			return d, false, nil
-		}
-		parent := filepath.Dir(d)
-		if parent == d {
-			break
-		}
-		d = parent
+	if root, ok := walkUp(dir, isMediaWiki); ok {
+		return root, false, nil
 	}
 	return "", false, ErrNoMediaWiki
+}
+
+func FindLock(cwd string) (string, error) {
+	dir, err := filepath.Abs(cwd)
+	if err != nil {
+		return "", err
+	}
+	d, ok := walkUp(dir, func(p string) bool { return fileExists(filepath.Join(p, "phuo.lock")) })
+	if !ok {
+		return "", ErrNoLock
+	}
+	return filepath.Join(d, "phuo.lock"), nil
+}
+
+func walkUp(dir string, match func(string) bool) (string, bool) {
+	for d := dir; ; {
+		if match(d) {
+			return d, true
+		}
+		parent := filepath.Dir(d)
+		if parent == d {
+			return "", false
+		}
+		d = parent
+	}
 }
 
 func Load(cwd string) (*Project, error) {
@@ -200,14 +212,8 @@ func Load(cwd string) (*Project, error) {
 	if err := json.UnmarshalRead(mf, &m); err != nil {
 		return nil, fmt.Errorf("phuo.json: %w", err)
 	}
-	var lock Lock
-	lf, err := os.Open(filepath.Join(root, "phuo.lock"))
-	if err == nil {
-		defer lf.Close()
-		if err := json.UnmarshalRead(lf, &lock); err != nil {
-			return nil, fmt.Errorf("phuo.lock: %w", err)
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
+	lock, err := ReadLock(filepath.Join(root, "phuo.lock"))
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return nil, err
 	}
 	cache, err := CacheDir("", os.Getenv("PHUO_CACHE_DIR"))
@@ -217,6 +223,19 @@ func Load(cwd string) (*Project, error) {
 	p := &Project{Root: root, MWVersion: mwVer, CacheDir: cache}
 	p.SetState(m, lock)
 	return p, nil
+}
+
+func ReadLock(path string) (Lock, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return Lock{}, err
+	}
+	defer f.Close()
+	var lock Lock
+	if err := json.UnmarshalRead(f, &lock); err != nil {
+		return Lock{}, fmt.Errorf("%s: %w", filepath.Base(path), err)
+	}
+	return lock, nil
 }
 
 func (p *Project) SetState(m Manifest, l Lock) {

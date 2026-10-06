@@ -282,18 +282,32 @@ func failDownload(part *os.File, partPath string, err error) error {
 	return err
 }
 
+// same as Download except the blob read
+func Cached(cacheDir, url string) (string, bool) {
+	blob, integrity, ok := cacheEntry(cacheDir, url)
+	if !ok {
+		return "", false
+	}
+	if _, err := os.Stat(blob); err != nil {
+		return "", false
+	}
+	return integrity, true
+}
+
+// the content-addressed blob may be shared
+func Uncache(cacheDir, url string) error {
+	err := os.Remove(filepath.Join(cacheDir, "tarballs", "by-url", urlKey(url)))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
+}
+
 func serveCached(cacheDir, url string, w io.Writer) (string, bool) {
-	idx := filepath.Join(cacheDir, "tarballs", "by-url", urlKey(url))
-	b, err := os.ReadFile(idx)
-	if err != nil {
+	blob, integrity, ok := cacheEntry(cacheDir, url)
+	if !ok {
 		return "", false
 	}
-	integrity := string(trimNL(b))
-	raw, err := base64.StdEncoding.DecodeString(integrity[len("sha256-"):])
-	if err != nil || len(raw) != sha256.Size {
-		return "", false
-	}
-	blob := filepath.Join(cacheDir, "tarballs", hex.EncodeToString(raw)+".tar.gz")
 	f, err := os.Open(blob)
 	if err != nil {
 		return "", false
@@ -303,6 +317,22 @@ func serveCached(cacheDir, url string, w io.Writer) (string, bool) {
 		return "", false
 	}
 	return integrity, true
+}
+
+func cacheEntry(cacheDir, url string) (blob, integrity string, ok bool) {
+	if cacheDir == "" {
+		return "", "", false
+	}
+	b, err := os.ReadFile(filepath.Join(cacheDir, "tarballs", "by-url", urlKey(url)))
+	if err != nil {
+		return "", "", false
+	}
+	integrity = string(trimNL(b))
+	raw, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(integrity, "sha256-"))
+	if err != nil || len(raw) != sha256.Size {
+		return "", "", false
+	}
+	return filepath.Join(cacheDir, "tarballs", hex.EncodeToString(raw)+".tar.gz"), integrity, true
 }
 
 func urlKey(url string) string {
