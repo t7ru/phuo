@@ -46,7 +46,7 @@ func Client() *http.Client {
 // GitHub's API and codeload accept it too (x-access-token)
 func hostAuth() map[string]string {
 	auth := map[string]string{}
-	if tok := cmp.Or(os.Getenv("GITHUB_TOKEN"), os.Getenv("GH_TOKEN")); tok != "" {
+	if tok := cmp.Or(os.Getenv("GH_TOKEN"), os.Getenv("GITHUB_TOKEN")); tok != "" {
 		v := "Basic " + base64.StdEncoding.EncodeToString([]byte("x-access-token:"+tok))
 		for _, h := range []string{"github.com", "codeload.github.com", "api.github.com"} {
 			auth[h] = v
