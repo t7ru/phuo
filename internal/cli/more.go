@@ -84,6 +84,7 @@ type outdatedRow struct {
 	Latest     string `json:"latest"`
 	Behind     string `json:"behind,omitzero"`
 	Flag       string `json:"flag,omitzero"`
+	Hint       string `json:"hint,omitzero"`
 	Key        string `json:"-"`
 	CurrentSHA string `json:"-"`
 	TargetSHA  string `json:"-"`
@@ -119,7 +120,15 @@ func (c *OutdatedCmd) Run(ctx context.Context, cli *CLI) error {
 		}
 		t.Rows = append(t.Rows, []string{pkg, r.Ref, r.Current, r.Latest, r.Behind})
 	}
-	return t.Render(os.Stdout)
+	if err := t.Render(os.Stdout); err != nil {
+		return err
+	}
+	for _, r := range rows {
+		if r.Hint != "" {
+			rep.Info("%s", r.Hint)
+		}
+	}
+	return nil
 }
 
 func collectOutdated(ctx context.Context, p *project.Project, patterns []string, rep *ui.Reporter, reg *registry.Client, jobs int) ([]outdatedRow, error) {
@@ -192,6 +201,14 @@ func collectOutdated(ctx context.Context, p *project.Project, patterns []string,
 			}()
 			lp := p.Lock.Packages[key]
 			res, err := resolver.Resolve(ctx, specs[i], ropts)
+			if off, ok := errors.AsType[*source.OffDist](err); ok {
+				rows[i] = outdatedRow{
+					Package: keyName(key), Ref: lp.Ref,
+					Current: formatSHADate(lp.SHA, lp.Date), Latest: "-",
+					Key: key, Flag: "dist", Hint: off.Error(),
+				}
+				return nil
+			}
 			if err != nil {
 				return err
 			}
