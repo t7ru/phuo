@@ -667,8 +667,10 @@ func (pl *Plan) warnShadows(reporter *ui.Reporter, done []*workItem) {
 func (pl *Plan) prefetch(ctx context.Context, reg *registry.Client, round []*workItem) error {
 	var exts, skins []string
 	for _, it := range round {
-		_, locked := pl.p.Lock.Packages[it.key]
-		if it.spec.Kind != spec.Registry || (locked && !pl.opts.Update && !pl.opts.Force) {
+		if it.spec.Kind != spec.Registry {
+			continue
+		}
+		if lp, locked := pl.p.Lock.Packages[it.key]; locked && !pl.opts.Update && !pl.opts.Force && it.lockSpec == lp.Spec {
 			continue
 		}
 		if it.spec.Skin {
@@ -723,7 +725,7 @@ func (pl *Plan) prepareItem(ctx context.Context, it *workItem, resolver source.R
 	}
 	if haveLock && !pl.opts.Update && !pl.opts.Force {
 		dest := pl.destPath(it.key)
-		if stampMatch(dest, lp) {
+		if it.lockSpec == lp.Spec && stampMatch(dest, lp) {
 			it.keep = true
 			it.res = source.Resolved{Name: it.spec.Name, Type: keyType(it.key), Ref: lp.Ref, SHA: lp.SHA}
 			it.lockSpec = lp.Spec
@@ -769,7 +771,7 @@ func (pl *Plan) prepareItem(ctx context.Context, it *workItem, resolver source.R
 		it.lockSpec = "dep"
 	}
 
-	if pl.opts.Update && haveLock && lp.SHA != "" && lp.SHA == res.SHA && !pl.opts.Force {
+	if pl.opts.Update && haveLock && lp.SHA != "" && lp.SHA == res.SHA && !pl.opts.Force && it.lockSpec == lp.Spec {
 		it.keep = true
 		return nil
 	}
