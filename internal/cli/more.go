@@ -389,16 +389,18 @@ func (c *InfoCmd) Run(ctx context.Context, cli *CLI) error {
 	if rest, ok := strings.CutPrefix(name, "skin:"); ok {
 		name, skin = rest, true
 	}
-	typ := "extensions"
+	typ, lookup := "extensions", name
 	if skin {
-		typ = "skins"
+		typ, lookup = "skins", "skins/"+name
 	}
 	key := typ + "/" + name
-	lp, installed := p.Lock.Packages[key]
-	if !installed && !skin {
-		if l, ok := p.Lock.Packages["skins/"+name]; ok {
-			typ, key, lp, installed = "skins", "skins/"+name, l, true
-		}
+	var lp project.Package
+	installed := false
+	if k, err := p.Lock.Lookup(lookup); err == nil {
+		key, lp, installed = k, p.Lock.Packages[k], true
+		typ, name = keyType(k), keyName(k)
+	} else if !errors.Is(err, project.ErrNotInstalled) {
+		return userErr(err.Error())
 	}
 
 	var br registry.Branches
@@ -823,7 +825,7 @@ func (c *WhyCmd) Run(ctx context.Context, cli *CLI) error {
 	if err != nil {
 		return err
 	}
-	key, err := resolveInstalledKey(p, c.Name)
+	key, err := p.Lock.Lookup(c.Name)
 	if err != nil {
 		return err
 	}
@@ -886,7 +888,7 @@ func (c *ChangelogCmd) Run(ctx context.Context, cli *CLI) error {
 	if err != nil {
 		return err
 	}
-	key, err := resolveInstalledKey(p, c.Name)
+	key, err := p.Lock.Lookup(c.Name)
 	if err != nil {
 		return err
 	}
@@ -1039,30 +1041,26 @@ func nameMatches(name string, patterns []string) bool {
 	if len(patterns) == 0 {
 		return true
 	}
-	var pos, neg []string
+	ok, any := false, false
 	for _, p := range patterns {
-		if rest, ok := strings.CutPrefix(p, "!"); ok {
-			neg = append(neg, rest)
-		} else {
-			pos = append(pos, p)
+		if rest, neg := strings.CutPrefix(p, "!"); neg {
+			if matchName(rest, name) {
+				return false
+			}
+			continue
 		}
+		any = true
+		ok = ok || matchName(p, name)
 	}
-	ok := len(pos) == 0
-	for _, p := range pos {
-		if m, err := path.Match(p, name); err == nil && m {
-			ok = true
-			break
-		}
+	return ok || !any
+}
+
+func matchName(pat, name string) bool {
+	if strings.ContainsAny(pat, "*?[") {
+		m, err := path.Match(pat, name)
+		return err == nil && m
 	}
-	if !ok {
-		return false
-	}
-	for _, p := range neg {
-		if m, err := path.Match(p, name); err == nil && m {
-			return false
-		}
-	}
-	return true
+	return strings.EqualFold(pat, name)
 }
 
 func withoutL10n(rows []outdatedRow, include bool) []outdatedRow {
@@ -1095,22 +1093,6 @@ func relNum(s string) (int, bool) {
 		return 0, false
 	}
 	return major*1000 + minor, true
-}
-
-func resolveInstalledKey(p *project.Project, name string) (string, error) {
-	if strings.Contains(name, "/") {
-		if _, ok := p.Lock.Packages[name]; ok {
-			return name, nil
-		}
-		return "", userErr(fmt.Sprintf("%s is not installed", name))
-	}
-	if _, ok := p.Lock.Packages["extensions/"+name]; ok {
-		return "extensions/" + name, nil
-	}
-	if _, ok := p.Lock.Packages["skins/"+name]; ok {
-		return "skins/" + name, nil
-	}
-	return "", userErr(fmt.Sprintf("%s is not installed", name))
 }
 
 func specForKey(p *project.Project, key string) (spec.Spec, error) {

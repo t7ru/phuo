@@ -139,7 +139,7 @@ func (c *RevertCmd) Run(ctx context.Context, cli *CLI) error {
 			rep.Info("reverting snapshot %d (%d packages)", n, len(p.Lock.Packages))
 		}
 	default:
-		key, err := resolveInstalledKey(p, name)
+		key, err := p.Lock.Lookup(name)
 		if err != nil {
 			return err
 		}

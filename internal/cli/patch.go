@@ -28,7 +28,7 @@ func (c *PatchCmd) Run(ctx context.Context, cli *CLI) error {
 	if err != nil {
 		return err
 	}
-	key, err := resolveInstalledKey(p, c.Name)
+	key, err := p.Lock.Lookup(c.Name)
 	if err != nil {
 		return err
 	}

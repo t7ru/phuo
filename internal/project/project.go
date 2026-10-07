@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -20,9 +21,10 @@ import (
 )
 
 var (
-	ErrNoProject   = errors.New("no phuo.json found; run phuo init")
-	ErrNoMediaWiki = errors.New("not a MediaWiki root (missing includes/Defines.php or LocalSettings.php)")
-	ErrNoLock      = errors.New("no phuo.lock found; run phuo init")
+	ErrNoProject    = errors.New("no phuo.json found; run phuo init")
+	ErrNoMediaWiki  = errors.New("not a MediaWiki root (missing includes/Defines.php or LocalSettings.php)")
+	ErrNoLock       = errors.New("no phuo.lock found; run phuo init")
+	ErrNotInstalled = errors.New("not installed")
 )
 
 type Project struct {
@@ -110,6 +112,37 @@ type Lock struct {
 	Version   int                `json:"version"`
 	MediaWiki string             `json:"mediawiki"`
 	Packages  map[string]Package `json:"packages,omitzero"`
+}
+
+func (l Lock) Lookup(name string) (string, error) {
+	slash := strings.Contains(name, "/")
+	if slash {
+		if _, ok := l.Packages[name]; ok {
+			return name, nil
+		}
+	} else if _, ok := l.Packages["extensions/"+name]; ok {
+		return "extensions/" + name, nil
+	} else if _, ok := l.Packages["skins/"+name]; ok {
+		return "skins/" + name, nil
+	}
+	var hits []string
+	for key := range l.Packages {
+		got := key
+		if !slash {
+			_, got, _ = strings.Cut(key, "/")
+		}
+		if strings.EqualFold(got, name) {
+			hits = append(hits, key)
+		}
+	}
+	switch len(hits) {
+	case 1:
+		return hits[0], nil
+	case 0:
+		return "", fmt.Errorf("%s is %w", name, ErrNotInstalled)
+	}
+	slices.Sort(hits)
+	return "", fmt.Errorf("%s matches %s", name, strings.Join(hits, ", "))
 }
 
 type Package struct {

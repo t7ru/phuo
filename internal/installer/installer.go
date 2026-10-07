@@ -143,7 +143,7 @@ func (pl *Plan) applyRemove(ctx context.Context, reporter *ui.Reporter) (Summary
 	userLoaded := func(key string) bool { return lsOK && ls.Outside.Has(key) }
 	keys := make([]string, 0, len(pl.remove))
 	for _, name := range pl.remove {
-		key, err := pl.resolveKey(name)
+		key, err := pl.p.Lock.Lookup(name)
 		if err != nil {
 			return sum, err
 		}
@@ -1171,22 +1171,6 @@ func (pl *Plan) pruneDeps(dry bool, keep func(key string) bool) (int, []string, 
 	return n, lines, mergedKeys, nil
 }
 
-func (pl *Plan) resolveKey(name string) (string, error) {
-	if strings.Contains(name, "/") {
-		if _, ok := pl.p.Lock.Packages[name]; ok {
-			return name, nil
-		}
-		return "", fmt.Errorf("%s is not installed", name)
-	}
-	if _, ok := pl.p.Lock.Packages["extensions/"+name]; ok {
-		return "extensions/" + name, nil
-	}
-	if _, ok := pl.p.Lock.Packages["skins/"+name]; ok {
-		return "skins/" + name, nil
-	}
-	return "", fmt.Errorf("%s is not installed", name)
-}
-
 func (pl *Plan) parentDir(typ string) string {
 	if typ == "skins" {
 		return filepath.Join(pl.p.Root, pl.p.Paths.Skins)
@@ -1327,7 +1311,7 @@ func (pl *Plan) SetLoad(ctx context.Context, reporter *ui.Reporter, names []stri
 	off := func(key string) bool { return pl.off(f, key) }
 	keys := make([]string, 0, len(names))
 	for _, n := range names {
-		key, err := pl.resolveKey(n)
+		key, err := pl.p.Lock.Lookup(n)
 		if err != nil {
 			return err
 		}

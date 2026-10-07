@@ -81,7 +81,7 @@ func (c *UnpinCmd) Run(ctx context.Context, cli *CLI) error {
 }
 
 func directPkg(p *project.Project, name, cmd string) (string, project.Package, string, error) {
-	key, err := resolveInstalledKey(p, name)
+	key, err := p.Lock.Lookup(name)
 	if err != nil {
 		return "", project.Package{}, "", err
 	}
