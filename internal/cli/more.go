@@ -268,6 +268,7 @@ func (c *RelCmd) Run(ctx context.Context, cli *CLI) error {
 		}
 		rep.Info("rel override cleared")
 		rep.Info("run phuo update to apply")
+		relNote(p, rep)
 		return nil
 	}
 	if c.Value != "" {
@@ -277,6 +278,7 @@ func (c *RelCmd) Run(ctx context.Context, cli *CLI) error {
 		}
 		rep.Info("rel set to %s", c.Value)
 		rep.Info("run phuo update to apply")
+		relNote(p, rep)
 		return nil
 	}
 	reg := registryClient(cli, p)
@@ -294,7 +296,22 @@ func (c *RelCmd) Run(ctx context.Context, cli *CLI) error {
 	rep.Info("manifest override: %s", override)
 	rep.Info("effective: %s", p.Rel)
 	rep.Info("snapshots: %s", strings.Join(snaps, ", "))
+	relNote(p, rep)
 	return nil
+}
+
+func relNote(p *project.Project, rep *ui.Reporter) {
+	n := 0
+	for _, m := range [...]map[string]string{p.Manifest.Extensions, p.Manifest.Skins} {
+		for _, val := range m {
+			if val != "*" {
+				n++
+			}
+		}
+	}
+	if n > 0 {
+		rep.Info("note: %d packages have pinned refs; run phuo add Name@REL to move one", n)
+	}
 }
 
 type LsCmd struct {
