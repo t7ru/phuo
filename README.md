@@ -11,7 +11,7 @@
 
 ## Why?
 
-No one likes to manage extension and skins in MediaWiki, there's extensions that have [Composer](https://getcomposer.org/) support which is great and help manage dependencies, but what about ones that don't?
+No one likes to manage extensions and skins in MediaWiki. Some have [Composer](https://getcomposer.org/) support, which is great for dependencies, but what about the ones that don't?
 
 phuo will manage everything for you, the external binaries needed, the compatibility policy, and more.
 
@@ -31,12 +31,14 @@ From your MediaWiki root:
 phuo init
 ```
 
-And that's it! `init` will record the extensions and skins already installed, letting you carry over what you already have with no extra effort.
+And that's it! `init` records the extensions and skins already installed, so you can carry over what you already have with no extra effort.
 
 When you need to install something, do:
 
 ```bash
 phuo add MobileFrontend
+phuo add skin:Liberty
+phuo add CodeMirror@REL1_45
 ```
 
 This will download the package from MediaWiki's 'registry' (the [Distributor](https://www.mediawiki.org/wiki/Special:ExtensionDistributor/) to be precise), installs what it requires, and loads it in your `LocalSettings.php`.
@@ -50,45 +52,40 @@ phuo update
 
 And you can check what needs to be updated... then update all of them, because of course we want them at their latest!
 
-Don't like the changes? do `phuo revert`, and the updates rolls back.
+Don't like the changes? Use `phuo revert` and it rolls the last change back!
 
-## Examples
+## Commands
 
-```bash
-phuo init                              # record extensions and skins already in the tree
-phuo add MobileFrontend                # download, install requirements, and load it
-phuo add MobileFrontend@REL1_43        # pin a branch, tag, master, github:owner/repo, or --skin
-phuo add                               # search and pick
-phuo remove Cite                       # uninstall
-phuo enable Cite                       # load it from LocalSettings.php
-phuo disable Cite                      # stays on disk, dropped from LocalSettings.php
-phuo install                           # install what phuo.lock records
-phuo install --frozen-lockfile         # stop if phuo.json and the lock disagree
-phuo fetch                             # download locked archives into the cache
-phuo update                            # move everything to the newest ref
-phuo update -i                         # pick what to update
-phuo revert                            # undo the last change
-phuo revert -i                         # pick what to undo
-phuo prune                             # delete directories that aren't in the lock
-phuo patch Echo                        # edit in place, then --commit or --remove
-phuo diff Echo                         # show what an update would change
-phuo licenses                          # group installed packages by license
-phuo outdated                          # list packages that can move forward
-phuo rel                               # show the release branch for this wiki
-phuo rel REL1_43                       # override it and run phuo update afterward
-phuo ls                                # what's installed
-phuo info MobileFrontend               # registry and local metadata for a package
-phuo search echo                       # search Extension and Skin pages
-phuo why Echo                          # why a dependency is here
-phuo changelog Echo                    # commits between the installed ref and the newest
-phuo doctor                            # check the install
-phuo cache                             # print the cache directory and size
-phuo cache rm                          # delete it
-phuo upgrade                           # update this phuo install
-phuo completions bash                  # bash, zsh, fish, or powershell
-```
+`phuo --help` lists everything, while `phuo <command> --help` lists flags. Commands that take names will open a picker if you were to you omit them.
 
-`phuo <command> --help` lists flags for that command.
+|                              |                                                        |
+| ---------------------------- | ------------------------------------------------------ |
+| `init`                       | Create `phuo.json` and record what's already installed |
+| `adopt`                      | Move your `wfLoad*` lines into the phuo block          |
+| `add` (`a`)                  | Add extensions or skins                                |
+| `remove` (`rm`)              | Remove packages and unused requirements                |
+| `install` (`i`)              | Install from `phuo.lock`                               |
+| `enable` / `disable`         | Load or stop loading packages in `LocalSettings.php`   |
+| `outdated`                   | List packages with newer commits                       |
+| `update` (`up`)              | Update to the latest commit of the branch              |
+| `pin` / `unpin`              | Pin or unpin at the current commit                     |
+| `revert`                     | Undo the last change                                   |
+| `rel`                        | Show or set the release branch                         |
+| `diff` / `changelog` (`log`) | What an update would change                            |
+| `patch`                      | Edit a package in place, then `--commit` or `--remove` |
+| `ls` (`list`)                | What's installed                                       |
+| `info`                       | Registry and local metadata                            |
+| `search`                     | Search Extension and Skin pages                        |
+| `why`                        | Why a package is installed                             |
+| `licenses`                   | Group by license                                       |
+| `doctor`                     | Health checks                                          |
+| `prune`                      | Delete directories not in the lock                     |
+| `fetch`                      | Download locked archives into the cache                |
+| `cache`                      | Show the cache, or `cache rm` to delete it             |
+| `upgrade`                    | Update this phuo binary                                |
+| `completions`                | bash, zsh, fish, or powershell                         |
+
+For a more comprehensive list, see [Phuo#Commands](https://www.mediawiki.org/wiki/Phuo#Commands) on its MediaWiki page.
 
 ## License
 
