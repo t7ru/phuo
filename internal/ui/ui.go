@@ -31,6 +31,7 @@ type Reporter struct {
 	verbose   bool
 	json      bool
 	mu        sync.Mutex
+	promptMu  sync.Mutex
 	spinIdx   int
 	haveProg  bool
 	ticking   bool
@@ -118,6 +119,21 @@ func (r *Reporter) Progress(format string, args ...any) {
 	}
 }
 
+func (r *Reporter) Prompt(fn func() error) error {
+	r.promptMu.Lock()
+	defer r.promptMu.Unlock()
+	r.mu.Lock()
+	msg := r.progMsg
+	r.mu.Unlock()
+	r.ClearProgress()
+	defer func() {
+		if msg != "" {
+			r.Progress("%s", msg)
+		}
+	}()
+	return fn()
+}
+
 func (r *Reporter) tick() {
 	t := time.NewTicker(100 * time.Millisecond)
 	defer t.Stop()
@@ -176,7 +192,7 @@ type Table struct {
 	Header  []string
 	Rows    [][]string
 	Unicode bool
-	Width int
+	Width   int
 }
 
 func (t Table) Render(w io.Writer) error {

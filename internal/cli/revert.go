@@ -113,7 +113,7 @@ func (c *RevertCmd) Run(ctx context.Context, cli *CLI) error {
 		if len(extra) > 0 {
 			rpl, err := installer.NewPlan(p, nil, extra, installer.Options{
 				DryRun: c.DryRun, NoCache: cli.NoCache, Offline: cli.Offline, Jobs: cli.Jobs,
-				SkipSave: true, Ask: asker(cli),
+				SkipSave: true, Ask: asker(cli, rep),
 			})
 			if err != nil {
 				return err
@@ -161,7 +161,7 @@ func (c *RevertCmd) Run(ctx context.Context, cli *CLI) error {
 
 	pl, err := installer.NewPlan(p, specs, nil, installer.Options{
 		Revert: true, DryRun: c.DryRun, NoCache: cli.NoCache, Offline: cli.Offline, Jobs: cli.Jobs,
-		Ask: asker(cli),
+		Ask: asker(cli, rep),
 	})
 	if err != nil {
 		return err

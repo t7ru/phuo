@@ -72,7 +72,7 @@ func (c *AddCmd) Run(ctx context.Context, cli *CLI) error {
 		LockfileOnly: c.LockfileOnly, Exact: c.Exact, Git: c.Git, Full: c.Full,
 		UpdateDB: c.UpdateDB, NoCache: cli.NoCache, Offline: cli.Offline, Skin: c.Skin, NoSave: c.NoSave,
 		Jobs: cli.Jobs,
-		Ask:  asker(cli),
+		Ask:  asker(cli, rep),
 	})
 	if err != nil {
 		return err
@@ -109,7 +109,7 @@ func (c *RemoveCmd) Run(ctx context.Context, cli *CLI) error {
 	pl, err := installer.NewPlan(p, nil, names, installer.Options{
 		Force: c.Force, NoComposer: c.NoComposer, NoLoad: c.NoLoad,
 		NoCache: cli.NoCache, Offline: cli.Offline,
-		Ask: asker(cli),
+		Ask: asker(cli, rep),
 	})
 	if err != nil {
 		return err
@@ -155,7 +155,7 @@ func setLoad(ctx context.Context, cli *CLI, cmd string, names []string, on bool)
 	if names, err = expandNames(p, names); err != nil {
 		return err
 	}
-	pl, err := installer.NewPlan(p, nil, nil, installer.Options{Ask: asker(cli)})
+	pl, err := installer.NewPlan(p, nil, nil, installer.Options{Ask: asker(cli, rep)})
 	if err != nil {
 		return err
 	}
@@ -204,7 +204,7 @@ func (c *InstallCmd) Run(ctx context.Context, cli *CLI) error {
 	pl, err := installer.NewPlan(p, specs, nil, installer.Options{
 		Force: c.Force, DryRun: c.DryRun, LockfileOnly: c.LockfileOnly, Frozen: c.FrozenLockfile,
 		UpdateDB: c.UpdateDB, NoCache: cli.NoCache, Offline: cli.Offline, Jobs: cli.Jobs,
-		Ask: asker(cli),
+		Ask: asker(cli, rep),
 	})
 	if err != nil {
 		return err
@@ -286,7 +286,7 @@ func (c *UpdateCmd) Run(ctx context.Context, cli *CLI) error {
 	pl, err := installer.NewPlan(p, specs, nil, installer.Options{
 		DryRun: c.DryRun, Update: true, L10n: c.L10n, UpdateDB: c.UpdateDB,
 		NoCache: cli.NoCache, Offline: cli.Offline, Registry: reg, Jobs: cli.Jobs,
-		Ask: asker(cli),
+		Ask: asker(cli, rep),
 	})
 	if err != nil {
 		return err

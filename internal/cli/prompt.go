@@ -61,7 +61,7 @@ func abort(err error) error {
 	return err
 }
 
-func asker(cli *CLI) func(string) bool {
+func asker(cli *CLI, rep *ui.Reporter) func(string) bool {
 	return func(title string) bool {
 		if cli.Yes {
 			return true
@@ -70,6 +70,7 @@ func asker(cli *CLI) func(string) bool {
 			return false
 		}
 		var ok bool
-		return form(huh.NewConfirm().Title(title).Value(&ok)) == nil && ok
+		err := rep.Prompt(func() error { return form(huh.NewConfirm().Title(title).Value(&ok)) })
+		return err == nil && ok
 	}
 }
