@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/t7ru/phuo/internal/archive"
@@ -287,9 +288,12 @@ func (pl *Plan) applyInstall(ctx context.Context, reporter *ui.Reporter) (Summar
 
 		g, gctx := errgroup.WithContext(ctx)
 		g.SetLimit(max(cmp.Or(pl.opts.Jobs, 16), 1))
+		var resolved atomic.Int64
 		for _, it := range round {
 			g.Go(func() error {
-				return pl.prepareItem(gctx, it, resolver, ropts, cacheDir)
+				err := pl.prepareItem(gctx, it, resolver, ropts, cacheDir)
+				reporter.Progress("resolved %d/%d packages (%s)...", resolved.Add(1), len(round), it.spec.Name)
+				return err
 			})
 		}
 		if err := g.Wait(); err != nil {
@@ -297,7 +301,7 @@ func (pl *Plan) applyInstall(ctx context.Context, reporter *ui.Reporter) (Summar
 			return Summary{}, err
 		}
 
-		reporter.Progress("installing %d packages...", len(round))
+		reporter.Progress("processing %d packages...", len(round))
 		for _, it := range round {
 			if it.keep {
 				it.kind = OpKeep
@@ -437,11 +441,13 @@ func (pl *Plan) applyInstall(ctx context.Context, reporter *ui.Reporter) (Summar
 		return Summary{}, err
 	}
 
+	installs := 0
 	depMap := map[string][]string{}
 	for _, it := range done {
 		if it.keep {
 			continue
 		}
+		installs++
 		var deps []string
 		for name := range it.man.Requires.Extensions {
 			deps = append(deps, "extensions/"+name)
@@ -456,10 +462,13 @@ func (pl *Plan) applyInstall(ctx context.Context, reporter *ui.Reporter) (Summar
 	var addLines []string
 	extN, skinN := 0, 0
 
+	installed := 0
 	for _, it := range done {
 		if it.keep {
 			continue
 		}
+		installed++
+		reporter.Progress("installing %d/%d packages (%s)...", installed, installs, it.res.Name)
 		if it.direct && pl.opts.Exact {
 			it.lockSpec = exactValue(it)
 		}

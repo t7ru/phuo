@@ -32,9 +32,10 @@ type Reporter struct {
 	json      bool
 	mu        sync.Mutex
 	promptMu  sync.Mutex
+	prompting bool
 	spinIdx   int
 	haveProg  bool
-	ticking   bool
+	stopCh    chan struct{}
 	progMsg   string
 }
 
@@ -112,10 +113,34 @@ func (r *Reporter) Progress(format string, args ...any) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.progMsg = fmt.Sprintf(format, args...)
+	if r.prompting {
+		return
+	}
+	r.startSpin()
+}
+
+// caller holds r.mu
+func (r *Reporter) startSpin() {
+	if r.progMsg == "" {
+		return
+	}
 	r.drawProgress()
-	if !r.ticking {
-		r.ticking = true
-		go r.tick()
+	if r.stopCh != nil {
+		return
+	}
+	r.stopCh = make(chan struct{})
+	go r.tick(r.stopCh)
+}
+
+// caller holds r.mu
+func (r *Reporter) stopSpin() {
+	if r.stopCh != nil {
+		close(r.stopCh)
+		r.stopCh = nil
+	}
+	if r.haveProg {
+		fmt.Fprint(r.errw, "\r\x1b[K")
+		r.haveProg = false
 	}
 }
 
@@ -123,28 +148,32 @@ func (r *Reporter) Prompt(fn func() error) error {
 	r.promptMu.Lock()
 	defer r.promptMu.Unlock()
 	r.mu.Lock()
-	msg := r.progMsg
+	r.prompting = true
+	r.stopSpin()
 	r.mu.Unlock()
-	r.ClearProgress()
 	defer func() {
-		if msg != "" {
-			r.Progress("%s", msg)
-		}
+		r.mu.Lock()
+		r.prompting = false
+		r.startSpin()
+		r.mu.Unlock()
 	}()
 	return fn()
 }
 
-func (r *Reporter) tick() {
+func (r *Reporter) tick(stop <-chan struct{}) {
 	t := time.NewTicker(100 * time.Millisecond)
 	defer t.Stop()
-	for range t.C {
-		r.mu.Lock()
-		if !r.ticking {
-			r.mu.Unlock()
+	for {
+		select {
+		case <-stop:
 			return
+		case <-t.C:
+			r.mu.Lock()
+			if r.stopCh == stop {
+				r.drawProgress()
+			}
+			r.mu.Unlock()
 		}
-		r.drawProgress()
-		r.mu.Unlock()
 	}
 }
 
@@ -159,12 +188,8 @@ func (r *Reporter) drawProgress() {
 func (r *Reporter) ClearProgress() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.ticking = false
 	r.progMsg = ""
-	if r.haveProg {
-		fmt.Fprint(r.errw, "\r\x1b[K")
-		r.haveProg = false
-	}
+	r.stopSpin()
 }
 
 func (r *Reporter) println(w io.Writer, prefix, format string, args ...any) {
