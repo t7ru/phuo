@@ -21,12 +21,15 @@ type Settings struct {
 const (
 	blockStart = "// >>> phuo (managed block, edit phuo.json instead)"
 	blockEnd   = "// <<< phuo"
+	gap        = `(?:\s|//[^\n]*|#.*|/\*[\s\S]*?\*/)*`
+	names      = `((?:['"][^'"]*['"]` + gap + `,?` + gap + `)+)`
 )
 
 var (
-	loadRe = regexp.MustCompile(
-		`wfLoad(Extension|Skin)s?\(\s*(?:\[\s*((?:['"][^'"]*['"]\s*,?\s*)+)\s*\]|array\s*\(\s*((?:['"][^'"]*['"]\s*,?\s*)+)\s*\)|((?:['"][^'"]*['"]\s*,?\s*)+))\s*\)`,
-	)
+	loadRe = regexp.MustCompile(`wfLoad(Extension|Skin)s?` + gap + `\(` + gap +
+		`(?:\[` + gap + names + gap + `\]` +
+		`|array` + gap + `\(` + gap + names + gap + `\)` +
+		`|` + names + `)` + gap + `\)`)
 	nameRe    = regexp.MustCompile(`['"]([^'"]+)['"]`)
 	settingRe = regexp.MustCompile(
 		`\$wg(ExtensionDirectory|StyleDirectory|Server|ScriptPath|DefaultSkin)\s*=\s*(?:'([^'$]*)'|"([^"$]*)")\s*;`,
@@ -115,15 +118,15 @@ func ScanBytes(b []byte) (File, error) {
 		if b[m[2]] == 'S' {
 			typ = "skins/"
 		}
-		var blob []byte
+		var lo, hi int
 		for _, i := range []int{4, 6, 8} {
 			if m[i] >= 0 {
-				blob = b[m[i]:m[i+1]]
+				lo, hi = m[i], m[i+1]
 				break
 			}
 		}
-		for _, n := range nameRe.FindAllSubmatch(blob, -1) {
-			key := typ + string(n[1])
+		for _, name := range loadNames(b, lo, hi, cm, !off) {
+			key := typ + name
 			if state[key] == 0 {
 				order = append(order, key)
 			}
@@ -308,12 +311,12 @@ func Drop(b []byte, keys []string) ([]byte, error) {
 		}
 		var kept []string
 		hit := false
-		for _, n := range nameRe.FindAllSubmatch(b[m[blob]:m[blob+1]], -1) {
-			if _, ok := drop[typ+string(n[1])]; ok {
+		for _, name := range loadNames(b, m[blob], m[blob+1], cm, true) {
+			if _, ok := drop[typ+name]; ok {
 				hit = true
 				continue
 			}
-			kept = append(kept, string(n[1]))
+			kept = append(kept, name)
 		}
 		if !hit {
 			continue
@@ -325,6 +328,17 @@ func Drop(b []byte, keys []string) ([]byte, error) {
 		b = slices.Concat(b[:m[blob]], []byte(quoteList(kept)), b[m[blob+1]:])
 	}
 	return b, nil
+}
+
+func loadNames(b []byte, lo, hi int, cm [][2]int, skipCommented bool) []string {
+	var names []string
+	for _, n := range nameRe.FindAllSubmatchIndex(b[lo:hi], -1) {
+		if skipCommented && commented(cm, lo+n[0]) {
+			continue
+		}
+		names = append(names, string(b[lo+n[2]:lo+n[3]]))
+	}
+	return names
 }
 
 func commented(cm [][2]int, p int) bool {
@@ -350,8 +364,8 @@ func cutCall(b []byte, from, to int) []byte {
 	}
 	ls := bytes.LastIndexByte(b[:from], '\n') + 1
 	le := len(b)
-	if i := bytes.IndexByte(b[from:], '\n'); i >= 0 {
-		le = from + i + 1
+	if i := bytes.IndexByte(b[end:], '\n'); i >= 0 {
+		le = end + i + 1
 	}
 	onlySpace := true
 	for _, c := range b[ls:from] {

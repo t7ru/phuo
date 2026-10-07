@@ -24,7 +24,7 @@ import (
 )
 
 type InitCmd struct {
-	ManageLoads bool `name:"manage-loads" help:"Move wfLoad* lines for adopted packages into the phuo block."`
+	ManageLoads bool `name:"manage-loads" aliases:"adopt" help:"Move wfLoad* lines for adopted packages into the phuo block."`
 }
 
 type AddCmd struct {
