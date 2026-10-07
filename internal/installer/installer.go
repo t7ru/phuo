@@ -104,6 +104,7 @@ type workItem struct {
 	depConstraint string
 	kind          OpKind
 	keep          bool
+	warn          string
 }
 
 func NewPlan(p *project.Project, add []spec.Spec, remove []string, opts Options) (*Plan, error) {
@@ -272,6 +273,7 @@ func (pl *Plan) applyInstall(ctx context.Context, reporter *ui.Reporter) (Summar
 
 	var done []*workItem
 	var hints []string
+	var keptBack, keptSpecs []string
 	edges := map[string][]string{}
 	cacheDir := pl.p.CacheDir
 	if pl.opts.NoCache {
@@ -304,31 +306,10 @@ func (pl *Plan) applyInstall(ctx context.Context, reporter *ui.Reporter) (Summar
 		reporter.Progress("processing %d packages...", len(round))
 		for _, it := range round {
 			if it.keep {
-				it.kind = OpKeep
-				done = append(done, it)
-				pl.Ops = append(pl.Ops, Op{Key: it.key, Kind: OpKeep, To: it.res.Ref})
-				if lp, ok := pl.p.Lock.Packages[it.key]; ok {
-					for _, dk := range lp.Dependencies {
-						if seen[dk] {
-							continue
-						}
-						if !pl.opts.Update && stampMatch(pl.destPath(dk), pl.p.Lock.Packages[dk]) {
-							seen[dk] = true
-							continue
-						}
-						name := keyName(dk)
-						nit := &workItem{
-							spec:     spec.Spec{Kind: spec.Registry, Name: name},
-							lockSpec: "dep", key: dk, fromLock: !pl.opts.Update,
-							requirers: []string{it.res.Name},
-						}
-						if keyType(dk) == "skins" {
-							nit.spec.Skin = true
-						}
-						seen[dk] = true
-						queue = append(queue, nit)
-					}
+				if it.warn != "" {
+					reporter.Warn("%s", it.warn)
 				}
+				pl.keepItem(it, seen, &queue, &done)
 				continue
 			}
 			if it.fallback404 {
@@ -347,11 +328,25 @@ func (pl *Plan) applyInstall(ctx context.Context, reporter *ui.Reporter) (Summar
 				}
 				if !ok {
 					msg := fmt.Sprintf("%s@%s requires MediaWiki %s (you have %s)", it.res.Name, it.res.Ref, mw, pl.p.MWVersion)
-					if !pl.opts.Force {
+					lp, locked := pl.p.Lock.Packages[it.key]
+					switch {
+					case pl.opts.Force:
+						reporter.Warn("%s", msg)
+					case pl.opts.Update && locked && stampMatch(pl.destPath(it.key), lp):
+						reporter.Warn("%s; keeping %s", msg, shortSHA(lp.SHA))
+						name := keyName(it.key)
+						keptBack = append(keptBack, name)
+						rel := pl.p.Rel
+						if lp.Policy == "ltsrel" {
+							rel = project.LTSRel(pl.p.MWVersion)
+						}
+						keptSpecs = append(keptSpecs, name+"@"+rel)
+						pl.keepItem(it, seen, &queue, &done)
+						continue
+					default:
 						pl.cleanupTemps(round)
 						return Summary{}, fmt.Errorf("%s", msg)
 					}
-					reporter.Warn("%s", msg)
 				}
 			}
 			if it.depConstraint != "" {
@@ -439,6 +434,14 @@ func (pl *Plan) applyInstall(ctx context.Context, reporter *ui.Reporter) (Summar
 	// so two installed packages may never share one
 	if err := pl.checkNames(done); err != nil {
 		return Summary{}, err
+	}
+
+	if len(keptBack) > 0 {
+		slices.Sort(keptBack)
+		slices.Sort(keptSpecs)
+		hints = append(hints, "kept back: "+strings.Join(keptBack, ", ")+
+			"; pin to a compatible ref with: phuo add "+strings.Join(keptSpecs, " ")+
+			" (or upgrade MediaWiki)")
 	}
 
 	installs := 0
@@ -621,6 +624,41 @@ func (pl *Plan) applyInstall(ctx context.Context, reporter *ui.Reporter) (Summar
 	return sum, nil
 }
 
+func (pl *Plan) keepItem(it *workItem, seen map[string]bool, queue, done *[]*workItem) {
+	if it.tmpDir != "" {
+		os.RemoveAll(it.tmpDir)
+		it.tmpDir = ""
+	}
+	it.keep = true
+	it.kind = OpKeep
+	lp, ok := pl.p.Lock.Packages[it.key]
+	if ok {
+		typ, name, _ := strings.Cut(it.key, "/")
+		it.res = source.Resolved{Name: name, Type: typ, Ref: lp.Ref, SHA: lp.SHA}
+		it.lockSpec = lp.Spec
+		for _, dk := range lp.Dependencies {
+			if seen[dk] {
+				continue
+			}
+			if !pl.opts.Update && stampMatch(pl.destPath(dk), pl.p.Lock.Packages[dk]) {
+				seen[dk] = true
+				continue
+			}
+			dtyp, dname, _ := strings.Cut(dk, "/")
+			seen[dk] = true
+			*queue = append(*queue, &workItem{
+				spec:      spec.Spec{Kind: spec.Registry, Name: dname, Skin: dtyp == "skins"},
+				lockSpec:  "dep",
+				key:       dk,
+				fromLock:  !pl.opts.Update,
+				requirers: []string{name},
+			})
+		}
+	}
+	*done = append(*done, it)
+	pl.Ops = append(pl.Ops, Op{Key: it.key, Kind: OpKeep, To: it.res.Ref})
+}
+
 func keepOwner(dest string, uid, gid int, had bool) error {
 	if os.Geteuid() != 0 {
 		return nil
@@ -717,8 +755,6 @@ func (pl *Plan) prepareItem(ctx context.Context, it *workItem, resolver source.R
 		}
 		if stampMatch(dest, lp) {
 			it.keep = true
-			it.res = source.Resolved{Name: it.spec.Name, Type: keyType(it.key), Ref: lp.Ref, SHA: lp.SHA}
-			it.lockSpec = lp.Spec
 			return nil
 		}
 		return pl.fetchFromLock(ctx, it, lp, cacheDir)
@@ -727,8 +763,6 @@ func (pl *Plan) prepareItem(ctx context.Context, it *workItem, resolver source.R
 		dest := pl.destPath(it.key)
 		if it.lockSpec == lp.Spec && stampMatch(dest, lp) {
 			it.keep = true
-			it.res = source.Resolved{Name: it.spec.Name, Type: keyType(it.key), Ref: lp.Ref, SHA: lp.SHA}
-			it.lockSpec = lp.Spec
 			return nil
 		}
 		if (it.fromLock || !it.direct) && lp.Archive != "" {
@@ -741,10 +775,14 @@ func (pl *Plan) prepareItem(ctx context.Context, it *workItem, resolver source.R
 	}
 
 	res, err := resolver.Resolve(ctx, it.spec, ropts)
-	if off, ok := errors.AsType[*source.OffDist](err); ok && pl.opts.Ask != nil &&
-		pl.opts.Ask(fmt.Sprintf("use %s instead? phuo cannot find it on ExtensionDistributor", off.Spec.String())) {
-		it.spec = off.Spec
-		res, err = resolver.Resolve(ctx, it.spec, ropts)
+	if off, ok := errors.AsType[*source.OffDist](err); ok {
+		if pl.opts.Ask != nil && pl.opts.Ask(fmt.Sprintf("use %s instead? phuo cannot find it on ExtensionDistributor", off.Spec.String())) {
+			it.spec = off.Spec
+			res, err = resolver.Resolve(ctx, it.spec, ropts)
+		} else if pl.opts.Update && haveLock && stampMatch(pl.destPath(it.key), lp) {
+			it.keep, it.warn = true, off.Error()
+			return nil
+		}
 	}
 	if err != nil {
 		return err
