@@ -84,7 +84,7 @@ func (c *UpgradeCmd) Run(ctx context.Context, cli *CLI) error {
 	case 0:
 		return out.finish(cli, rep, fmt.Sprintf("phuo %s is up to date", cur))
 	case 1:
-		return out.finish(cli, rep, fmt.Sprintf("phuo %s is newer than %s", cur, rel.TagName))
+		return out.finish(cli, rep, fmt.Sprintf("phuo %s is newer than %s!?", cur, rel.TagName))
 	}
 	if version.Module() != "" {
 		if goExe, err := exec.LookPath("go"); err == nil {
