@@ -730,6 +730,11 @@ func (pl *Plan) prepareItem(ctx context.Context, it *workItem, resolver source.R
 	}
 
 	res, err := resolver.Resolve(ctx, it.spec, ropts)
+	if off, ok := errors.AsType[*source.OffDist](err); ok && pl.opts.Ask != nil &&
+		pl.opts.Ask(fmt.Sprintf("use %s instead? phuo cannot find it on ExtensionDistributor", off.Spec.String())) {
+		it.spec = off.Spec
+		res, err = resolver.Resolve(ctx, it.spec, ropts)
+	}
 	if err != nil {
 		return err
 	}

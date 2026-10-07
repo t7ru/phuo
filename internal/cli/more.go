@@ -400,7 +400,7 @@ func (c *InfoCmd) Run(ctx context.Context, cli *CLI) error {
 		key, lp, installed = k, p.Lock.Packages[k], true
 		typ, name = keyType(k), keyName(k)
 	} else if !errors.Is(err, project.ErrNotInstalled) {
-		return userErr(err.Error())
+		return err
 	}
 
 	var br registry.Branches

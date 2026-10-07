@@ -51,6 +51,7 @@ type Policy struct {
 	Changelog      string
 	Composer       string
 	Types          []string
+	Repo           string
 }
 
 type SearchHit struct {
@@ -250,6 +251,7 @@ var (
 	reComposer   = regexp.MustCompile(`(?i)\|\s*composer\s*=\s*([^\n|{}<]+)`)
 	reTypes      = regexp.MustCompile(`(?i)\|\s*type\d?\s*=\s*([^\n|{}<]+)`)
 	reUpdate     = regexp.MustCompile(`(?i)\|\s*needs-updatephp\s*=\s*yes\b`)
+	reHostDL     = regexp.MustCompile(`(?i)\{\{\s*(Github|Gitlab)Download\s*\|\s*(?:user\s*=\s*)?([^}|\s]+)\s*\|\s*(?:repo\s*=\s*)?([^}|\s]+)`)
 	reTag        = regexp.MustCompile(`<[^>]*>`)
 	reLink       = regexp.MustCompile(`\[\[(?:[^\]|]*\|)?([^\]]*)\]\]`)
 )
@@ -384,6 +386,9 @@ func parsePolicy(wikitext string) Policy {
 	p.Changelog = firstField(wikitext, reChangelog)
 	p.Composer = firstField(wikitext, reComposer)
 	p.NeedsUpdatePHP = reUpdate.MatchString(wikitext)
+	if m := reHostDL.FindStringSubmatch(wikitext); m != nil {
+		p.Repo = strings.ToLower(m[1]) + ":" + m[2] + "/" + m[3]
+	}
 	for _, m := range reTypes.FindAllStringSubmatch(wikitext, -1) {
 		if t := plain(m[1]); t != "" && !slices.Contains(p.Types, t) {
 			p.Types = append(p.Types, t)

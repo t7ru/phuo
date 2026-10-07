@@ -41,6 +41,15 @@ type Resolved struct {
 	Hint       string
 }
 
+// stops resolve so install can ask before rewriting phuo.json
+type OffDist struct {
+	Spec spec.Spec
+}
+
+func (e *OffDist) Error() string {
+	return e.Spec.Name + ": not on ExtensionDistributor; phuo add " + e.Spec.String()
+}
+
 type ResolveOpts struct {
 	Rel    string
 	LTSRel string
@@ -106,41 +115,53 @@ func (r *resolver) Resolve(ctx context.Context, s spec.Spec, opts ResolveOpts) (
 func (r *resolver) resolveRegistry(ctx context.Context, s spec.Spec, opts ResolveOpts) (Resolved, error) {
 	name := s.Name
 	skinFirst := opts.Skin || s.Skin
+	pack := func(asSkin bool) (kind string, exts, skins []string) {
+		if asSkin {
+			return "skins", nil, []string{name}
+		}
+		return "extensions", []string{name}, nil
+	}
+
 	var typ string
 	var br registry.Branches
-	var found bool
-
-	try := func(asSkin bool) error {
-		var exts, skins []string
-		kind := "extensions"
-		if asSkin {
-			skins = []string{name}
-			kind = "skins"
-		} else {
-			exts = []string{name}
-		}
+	for _, asSkin := range []bool{skinFirst, !skinFirst} {
+		kind, exts, skins := pack(asSkin)
 		ex, sk, err := r.reg.Branches(ctx, exts, skins)
 		if err != nil {
-			return err
+			return Resolved{}, err
 		}
 		set := ex
 		if asSkin {
 			set = sk
 		}
 		if b, ok := set[name]; ok {
-			br, found, typ = b, true, kind
-		}
-		return nil
-	}
-	for _, asSkin := range []bool{skinFirst, !skinFirst} {
-		if err := try(asSkin); err != nil {
-			return Resolved{}, err
-		}
-		if found {
+			br, typ = b, kind
 			break
 		}
 	}
-	if !found {
+	if typ == "" {
+		for _, asSkin := range []bool{skinFirst, !skinFirst} {
+			kind, exts, skins := pack(asSkin)
+			pols, err := r.reg.Policies(ctx, exts, skins)
+			if err != nil {
+				return Resolved{}, err
+			}
+			p := pols[kind+"/"+name]
+			host, path, ok := strings.Cut(p.Repo, ":")
+			if !ok || path == "" || (host != "github" && host != "gitlab") {
+				continue
+			}
+			sp := spec.Spec{
+				Name: name, Repo: path, Ref: cmp.Or(s.SHA, s.Ref),
+				Skin: s.Skin || kind == "skins", Kind: spec.GitHub,
+			}
+			if host == "gitlab" {
+				sp.Kind = spec.GitLab
+			}
+			return Resolved{}, &OffDist{Spec: sp}
+		}
+	}
+	if typ == "" {
 		msg := fmt.Sprintf("Unknown extension/skin %q", name)
 		if sug := r.reg.Suggest(name); len(sug) > 0 {
 			msg += fmt.Sprintf(". Did you mean %s?", sug[0])
@@ -148,39 +169,36 @@ func (r *resolver) resolveRegistry(ctx context.Context, s spec.Spec, opts Resolv
 		return Resolved{}, fmt.Errorf("%s", msg)
 	}
 
-	var exts, skins []string
-	if typ == "skins" {
-		skins = []string{name}
-	} else {
-		exts = []string{name}
-	}
+	_, exts, skins := pack(typ == "skins")
 	pols, err := r.reg.Policies(ctx, exts, skins)
 	if err != nil {
 		return Resolved{}, err
 	}
 	pol := pols[typ+"/"+name]
-	policyKind := pol.Kind
-	if policyKind == "" {
-		policyKind = "rel"
+
+	// smart HTTP wants the .git URL yet the page URL does not have it
+	clone := br.Source
+	if strings.Contains(clone, "github.com") || strings.Contains(clone, "gitlab.com") {
+		clone = strings.TrimSuffix(clone, ".git") + ".git"
 	}
 
 	var shas map[string]string
-	if len(br.Refs) == 0 && strings.Contains(br.Source, "gerrit.wikimedia.org") {
-		// sometimes ExtensionDistributor fucks up and don't have snapshots of some repos
-		// gerrit should still hopefully have then
-		heads, err := gitproto.LsRefs(ctx, r.http, br.Source, "refs/heads/")
+	if len(br.Refs) == 0 && br.Source != "" {
+		// there can be packages with a page but aren't in distributor
+		// that or distributor fucks up and haven't made snapshots yet
+		heads, err := gitproto.LsRefs(ctx, r.http, clone, "refs/heads/")
 		if err != nil {
 			return Resolved{}, err
 		}
 		br.Refs, shas = map[string]string{}, map[string]string{}
 		for head, sha := range heads {
-			if ref, ok := strings.CutPrefix(head, "refs/heads/"); ok && (ref == "master" || strings.HasPrefix(ref, "REL")) {
+			if ref, ok := strings.CutPrefix(head, "refs/heads/"); ok && (ref == "master" || ref == "main" || strings.HasPrefix(ref, "REL")) {
 				br.Refs[ref], _ = ArchiveAt(br.Source, sha)
 				shas[ref] = sha
 			}
 		}
 	}
-	ref, hint, err := selectRef(name, s.Ref, opts, policyKind, br.Refs)
+	ref, hint, err := selectRef(name, s.Ref, opts, pol.Kind, br.Refs)
 	if err != nil {
 		return Resolved{}, err
 	}
@@ -198,17 +216,16 @@ func (r *resolver) resolveRegistry(ctx context.Context, s spec.Spec, opts Resolv
 	out := Resolved{
 		Name: name, Type: typ, Spec: s,
 		Ref: ref, SHA: sha, Source: br.Source,
-		Archive: archive, Policy: policyKind, Hint: hint,
+		Archive: archive, Policy: pol.Kind, Hint: hint,
 	}
 
 	if opts.Git {
-		out.Clone = br.Source
-		out.Archive = ""
+		out.Clone, out.Archive = clone, ""
 		want := ref
 		if s.SHA != "" {
 			want = s.SHA
 		}
-		_, sha, err = r.resolveHostRef(ctx, br.Source, want)
+		_, sha, err = r.resolveHostRef(ctx, clone, want)
 		if err != nil {
 			return Resolved{}, err
 		}
@@ -272,6 +289,16 @@ func selectRef(name, pinned string, opts ResolveOpts, policy string, refs map[st
 	}
 	if best := nearestREL(refs, opts.Rel); best != "" {
 		return "", "", fmt.Errorf("no suitable ref for %s (available: %s); try phuo add %s@%s", name, list, name, best)
+	}
+	for r := range refs {
+		if strings.HasPrefix(r, "REL") {
+			return "", "", fmt.Errorf("no suitable ref for %s (available: %s); try phuo add %s@REF", name, list, name)
+		}
+	}
+	for _, fb := range []string{"main", "master"} {
+		if _, ok := refs[fb]; ok {
+			return fb, "", nil
+		}
 	}
 	return "", "", fmt.Errorf("no suitable ref for %s (available: %s); try phuo add %s@REF", name, list, name)
 }

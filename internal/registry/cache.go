@@ -180,7 +180,7 @@ func checkAPIError(body []byte) error {
 }
 
 func (c *Client) readPolicyCache(title string) (Policy, bool) {
-	key := "policy7:" + title
+	key := "policy77:" + title
 	e, hit := c.readCache(key)
 	if hit && time.Now().Before(e.Expires) {
 		var p Policy
@@ -207,7 +207,7 @@ func (c *Client) writePolicyCache(title string, p Policy) {
 	if err != nil {
 		return
 	}
-	c.writeCache("policy7:"+title, cacheEntry{
+	c.writeCache("policy77:"+title, cacheEntry{
 		Expires: time.Now().Add(7 * 24 * time.Hour),
 		Body:    body,
 	})
