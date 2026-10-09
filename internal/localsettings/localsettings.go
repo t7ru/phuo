@@ -42,6 +42,7 @@ type File struct {
 	Disabled Loads // commented-out user loads; phuo treats them as deliberately off
 	Settings
 	Line map[string]int // key -> line of its user-written load (active, else commented)
+	raw  []byte
 }
 
 func (l Loads) Has(key string) bool {
@@ -101,11 +102,18 @@ func ScanBytes(b []byte) (File, error) {
 	)
 	state := map[string]int{}
 	var order []string
+	line, at := 1, 0
 	for _, m := range loadRe.FindAllSubmatchIndex(b, -1) {
 		inside := start >= 0 && m[0] >= start && m[1] <= end
 		off := commented(cm, m[0])
 		if inside && off {
 			continue
+		}
+		for at < m[0] {
+			if b[at] == '\n' {
+				line++
+			}
+			at++
 		}
 		bit := outside
 		switch {
@@ -131,7 +139,7 @@ func ScanBytes(b []byte) (File, error) {
 				order = append(order, key)
 			}
 			if bit != inBlock && state[key]&outside == 0 && (bit == outside || state[key]&disabled == 0) {
-				f.Line[key] = 1 + bytes.Count(b[:m[0]], []byte("\n"))
+				f.Line[key] = line
 			}
 			state[key] |= bit
 		}
@@ -169,6 +177,7 @@ func ScanBytes(b []byte) (File, error) {
 			s.DefaultSkin = val
 		}
 	}
+	f.raw = b
 	return f, nil
 }
 
@@ -210,6 +219,14 @@ func Write(path string, want Loads) (changed bool, err error) {
 	if err != nil {
 		return false, err
 	}
+	return write(path, b, want)
+}
+
+func (f File) Write(path string, want Loads) (bool, error) {
+	return write(path, f.raw, want)
+}
+
+func write(path string, b []byte, want Loads) (bool, error) {
 	out, err := Render(b, want)
 	if err != nil {
 		return false, fmt.Errorf("%s: %w", path, err)
