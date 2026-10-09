@@ -23,6 +23,7 @@ func ExtractTarGz(r io.Reader, root *os.Root) (err error) {
 			err = e
 		}
 	}()
+	x := newExtractor(root)
 	tr := tar.NewReader(gz)
 	for {
 		h, err := tr.Next()
@@ -41,9 +42,9 @@ func ExtractTarGz(r io.Reader, root *os.Root) (err error) {
 		}
 		switch h.Typeflag {
 		case tar.TypeDir:
-			err = root.MkdirAll(name, 0o755)
+			err = x.mkdir(name)
 		case tar.TypeReg:
-			err = writeFile(root, name, tr, h.FileInfo().Mode().Perm())
+			err = x.writeFile(name, tr, h.FileInfo().Mode().Perm())
 		case tar.TypeSymlink:
 			if safeSymlink(name, h.Linkname) {
 				err = root.Symlink(h.Linkname, name)
@@ -61,6 +62,7 @@ func ExtractZip(zipPath string, root *os.Root) error {
 		return err
 	}
 	defer zr.Close()
+	x := newExtractor(root)
 	for _, f := range zr.File {
 		name, skip, err := cleanEntry(f.Name)
 		if err != nil {
@@ -72,7 +74,7 @@ func ExtractZip(zipPath string, root *os.Root) error {
 		mode := f.Mode()
 		switch {
 		case mode.IsDir():
-			if err := root.MkdirAll(name, 0o755); err != nil {
+			if err := x.mkdir(name); err != nil {
 				return err
 			}
 		case mode&fs.ModeSymlink != 0:
@@ -97,7 +99,7 @@ func ExtractZip(zipPath string, root *os.Root) error {
 			if err != nil {
 				return err
 			}
-			err = writeFile(root, name, rc, mode.Perm())
+			err = x.writeFile(name, rc, mode.Perm())
 			rc.Close()
 			if err != nil {
 				return err
@@ -146,15 +148,49 @@ func Swap(src, dest string) error {
 	return os.RemoveAll(old)
 }
 
-func writeFile(root *os.Root, name string, r io.Reader, perm fs.FileMode) error {
-	if err := root.MkdirAll(path.Dir(name), 0o755); err != nil {
+type extractor struct {
+	root *os.Root
+	dirs map[string]struct{}
+	buf  []byte
+}
+
+func newExtractor(root *os.Root) *extractor {
+	return &extractor{
+		root: root,
+		dirs: map[string]struct{}{".": {}},
+		buf:  make([]byte, 32*1024),
+	}
+}
+
+func (x *extractor) mkdir(name string) error {
+	if _, ok := x.dirs[name]; ok {
+		return nil
+	}
+	if err := x.root.MkdirAll(name, 0o755); err != nil {
 		return err
 	}
-	f, err := root.OpenFile(name, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, perm|0o600)
+	for {
+		if _, ok := x.dirs[name]; ok {
+			return nil
+		}
+		x.dirs[name] = struct{}{}
+		parent := path.Dir(name)
+		if parent == name {
+			return nil
+		}
+		name = parent
+	}
+}
+
+func (x *extractor) writeFile(name string, r io.Reader, perm fs.FileMode) error {
+	if err := x.mkdir(path.Dir(name)); err != nil {
+		return err
+	}
+	f, err := x.root.OpenFile(name, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, perm|0o600)
 	if err != nil {
 		return err
 	}
-	_, err = io.Copy(f, r)
+	_, err = io.CopyBuffer(f, r, x.buf)
 	return errors.Join(err, f.Close())
 }
 
