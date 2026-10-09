@@ -109,6 +109,7 @@ func (c *DoctorCmd) Run(ctx context.Context, cli *CLI) error {
 		}
 	}
 
+	var expectPHP map[string]bool
 	if !p.Manifest.LocalSettings.Disabled() {
 		lsPath, ok := p.Manifest.LocalSettings.Value("LocalSettings.php")
 		if ok {
@@ -120,8 +121,12 @@ func (c *DoctorCmd) Run(ctx context.Context, cli *CLI) error {
 				if err != nil {
 					problem("%v", err)
 				} else {
+					expectPHP = map[string]bool{}
 					for _, l := range []localsettings.Loads{ls.Outside, ls.InBlock} {
 						for _, key := range l.Keys() {
+							if _, ok := p.Lock.Packages[key]; ok {
+								expectPHP[key] = true
+							}
 							if missing[key] {
 								continue
 							}
@@ -222,7 +227,7 @@ func (c *DoctorCmd) Run(ctx context.Context, cli *CLI) error {
 		bin, _ := p.Manifest.PHP.Value("php")
 		php := mw.PHP{Bin: bin, Root: p.Root}
 		if php.Available() {
-			doctorPHP(ctx, p, php, problem, rep.Warn)
+			doctorPHP(ctx, p, php, expectPHP, problem, rep.Warn)
 		}
 	}
 
@@ -332,7 +337,7 @@ func composerIncludes(doc map[string]any) []string {
 	return out
 }
 
-func doctorPHP(ctx context.Context, p *project.Project, php mw.PHP, problem, warn func(string, ...any)) {
+func doctorPHP(ctx context.Context, p *project.Project, php mw.PHP, expect map[string]bool, problem, warn func(string, ...any)) {
 	loaded, err := php.Registry(ctx)
 	if err != nil {
 		warn("php: %s", firstLine(err.Error()))
@@ -344,9 +349,25 @@ func doctorPHP(ctx context.Context, p *project.Project, php mw.PHP, problem, war
 		if strings.EqualFold(l.Type, "skin") || strings.EqualFold(l.Type, "skins") {
 			typ = "skins"
 		}
-		regSet[typ+"/"+l.Name] = true
+		// directory could differ from the manifest name
+		name := l.Name
+		if l.Path != "" {
+			dir := l.Path
+			switch strings.ToLower(filepath.Base(dir)) {
+			case "extension.json", "skin.json":
+				dir = filepath.Dir(dir)
+			}
+			name = filepath.Base(dir)
+		}
+		regSet[typ+"/"+name] = true
 	}
-	for key := range p.Lock.Packages {
+	if expect == nil {
+		expect = make(map[string]bool, len(p.Lock.Packages))
+		for key := range p.Lock.Packages {
+			expect[key] = true
+		}
+	}
+	for key := range expect {
 		if !regSet[key] {
 			problem("%s: in lock but not in PHP ExtensionRegistry", key)
 		}

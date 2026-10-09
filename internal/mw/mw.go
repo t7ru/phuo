@@ -122,8 +122,24 @@ func (p PHP) Registry(ctx context.Context) ([]Loaded, error) {
 	if err != nil {
 		return nil, phpErr(err, stderr)
 	}
+	return decodeRegistry(stdout)
+}
+
+func decodeRegistry(b []byte) ([]Loaded, error) {
+	b = bytes.TrimSpace(b)
+	if len(b) > 0 && b[0] == '{' {
+		var obj map[string]Loaded
+		if err := json.Unmarshal(b, &obj); err != nil {
+			return nil, err
+		}
+		out := make([]Loaded, 0, len(obj))
+		for _, v := range obj {
+			out = append(out, v)
+		}
+		return out, nil
+	}
 	var out []Loaded
-	if err := json.Unmarshal(stdout, &out); err != nil {
+	if err := json.Unmarshal(b, &out); err != nil {
 		return nil, err
 	}
 	return out, nil
