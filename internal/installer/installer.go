@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -143,6 +144,7 @@ func (pl *Plan) applyRemove(ctx context.Context, reporter *ui.Reporter) (Summary
 	// a leftover user wfLoad* for a deleted dir is fatal on every request
 	// good thing phuo never edits those lines haha...
 	userLoaded := func(key string) bool { return lsOK && ls.Outside.Has(key) }
+	idx := pl.requireIndex()
 	keys := make([]string, 0, len(pl.remove))
 	for _, name := range pl.remove {
 		key, err := pl.p.Lock.Lookup(name)
@@ -153,7 +155,7 @@ func (pl *Plan) applyRemove(ctx context.Context, reporter *ui.Reporter) (Summary
 			keys = append(keys, key)
 			continue
 		}
-		if deps := pl.dependents(key); len(deps) > 0 {
+		if deps := liveDeps(idx, key, pl.p.Lock.Packages); len(deps) > 0 {
 			return sum, fmt.Errorf("%s is required by %s (use --force to remove)", keyName(key), joinNames(deps))
 		}
 		if userLoaded(key) {
@@ -289,7 +291,7 @@ func (pl *Plan) applyInstall(ctx context.Context, reporter *ui.Reporter) (Summar
 		}
 
 		g, gctx := errgroup.WithContext(ctx)
-		g.SetLimit(max(cmp.Or(pl.opts.Jobs, 16), 1))
+		g.SetLimit(pl.jobs())
 		var resolved atomic.Int64
 		for _, it := range round {
 			g.Go(func() error {
@@ -1150,19 +1152,27 @@ func pkgSpec(lp project.Package, ok bool) string {
 	return lp.Spec
 }
 
-func (pl *Plan) dependents(key string) []string {
-	name := keyName(key)
-	typ := keyType(key)
-	var deps []string
+func (pl *Plan) jobs() int { return max(cmp.Or(pl.opts.Jobs, 16), 1) }
+
+func (pl *Plan) requireIndex() map[string][]string {
+	idx := make(map[string][]string, len(pl.p.Lock.Packages))
 	for k, pkg := range pl.p.Lock.Packages {
-		if k == key {
-			continue
+		for name := range pkg.Requires.Extensions {
+			dk := "extensions/" + name
+			idx[dk] = append(idx[dk], k)
 		}
-		m := pkg.Requires.Extensions
-		if typ == "skins" {
-			m = pkg.Requires.Skins
+		for name := range pkg.Requires.Skins {
+			dk := "skins/" + name
+			idx[dk] = append(idx[dk], k)
 		}
-		if _, ok := m[name]; ok {
+	}
+	return idx
+}
+
+func liveDeps(idx map[string][]string, key string, pkgs map[string]project.Package) []string {
+	var deps []string
+	for _, k := range idx[key] {
+		if _, ok := pkgs[k]; ok && k != key {
 			deps = append(deps, k)
 		}
 	}
@@ -1198,10 +1208,11 @@ func (pl *Plan) setDisabled(key string, off bool) {
 func (pl *Plan) pruneDeps(dry bool, keep func(key string) bool) (int, []string, []string, error) {
 	n := 0
 	var lines, mergedKeys []string
+	idx := pl.requireIndex()
 	for {
 		var drop []string
 		for key, pkg := range pl.p.Lock.Packages {
-			if pkg.Spec == "dep" && len(pl.dependents(key)) == 0 && !keep(key) {
+			if pkg.Spec == "dep" && len(liveDeps(idx, key, pl.p.Lock.Packages)) == 0 && !keep(key) {
 				drop = append(drop, key)
 			}
 		}
@@ -1284,19 +1295,42 @@ func (pl *Plan) applyPkgPatch(ctx context.Context, it *workItem, reporter *ui.Re
 
 func (pl *Plan) checkNames(done []*workItem) error {
 	var fresh []*workItem
+	freshKeys := make(map[string]struct{}, len(done))
 	for _, it := range done {
 		if !it.keep && it.man.Name != "" {
 			fresh = append(fresh, it)
+			freshKeys[it.key] = struct{}{}
 		}
 	}
 	if len(fresh) == 0 {
 		return nil
 	}
-	names := make(map[string]string, len(pl.p.Lock.Packages)+len(fresh))
+	type named struct{ name, key string }
+	var (
+		mu       sync.Mutex
+		existing []named
+	)
+	g := new(errgroup.Group)
+	g.SetLimit(pl.jobs())
 	for key := range pl.p.Lock.Packages {
-		if man, _, err := manifest.Read(pl.destPath(key)); err == nil && man.Name != "" {
-			names[man.Name] = key
+		if _, skip := freshKeys[key]; skip {
+			continue
 		}
+		g.Go(func() error {
+			man, _, err := manifest.Read(pl.destPath(key))
+			if err != nil || man.Name == "" {
+				return nil
+			}
+			mu.Lock()
+			existing = append(existing, named{man.Name, key})
+			mu.Unlock()
+			return nil
+		})
+	}
+	g.Wait()
+	names := make(map[string]string, len(existing)+len(fresh))
+	for _, n := range existing {
+		names[n.name] = n.key
 	}
 	for _, it := range fresh {
 		if prev, ok := names[it.man.Name]; ok && prev != it.key {
@@ -1362,6 +1396,7 @@ func (pl *Plan) SetLoad(ctx context.Context, reporter *ui.Reporter, names []stri
 	if !ok {
 		return fmt.Errorf("phuo does not manage LocalSettings.php here (missing, \"localSettings\": false, or --no-load)")
 	}
+	idx := pl.requireIndex()
 	off := func(key string) bool { return pl.off(f, key) }
 	keys := make([]string, 0, len(names))
 	for _, n := range names {
@@ -1403,7 +1438,7 @@ func (pl *Plan) SetLoad(ctx context.Context, reporter *ui.Reporter, names []stri
 				return fmt.Errorf("%s is loaded by your own line at %s:%d; comment that line out to disable it",
 					keyName(key), filepath.Base(path), f.Line[key])
 			}
-			need := slices.DeleteFunc(pl.dependents(key), func(k string) bool { return off(k) || slices.Contains(keys, k) })
+			need := slices.DeleteFunc(liveDeps(idx, key, pl.p.Lock.Packages), func(k string) bool { return off(k) || slices.Contains(keys, k) })
 			if len(need) > 0 {
 				return fmt.Errorf("%s is required by %s; disable those too", keyName(key), joinNames(need))
 			}
@@ -1448,29 +1483,59 @@ func (pl *Plan) localSettings() (path string, f localsettings.File, ok bool, err
 	return path, f, err == nil, err
 }
 
+func loadSet(l localsettings.Loads) map[string]struct{} {
+	m := make(map[string]struct{}, len(l.Extensions)+len(l.Skins))
+	for _, n := range l.Extensions {
+		m["extensions/"+n] = struct{}{}
+	}
+	for _, n := range l.Skins {
+		m["skins/"+n] = struct{}{}
+	}
+	return m
+}
+
 func (pl *Plan) writeLocalSettings(reporter *ui.Reporter, path string, f localsettings.File) error {
 	var want localsettings.Loads
 	var added, removed []string
-	off := func(key string) bool { return pl.off(f, key) }
+	outside := loadSet(f.Outside)
+	inBlock := loadSet(f.InBlock)
+	disabledLS := loadSet(f.Disabled)
+	disabledMan := make(map[string]struct{}, len(pl.p.Manifest.Disabled))
+	for _, k := range pl.p.Manifest.Disabled {
+		disabledMan[k] = struct{}{}
+	}
+	idx := pl.requireIndex()
+	off := func(key string) bool {
+		if _, ok := outside[key]; ok {
+			return false
+		}
+		_, d := disabledMan[key]
+		_, l := disabledLS[key]
+		return d || l
+	}
+	wantSet := make(map[string]struct{}, len(pl.p.Lock.Packages))
 	for key := range pl.p.Lock.Packages {
-		switch {
-		case f.Outside.Has(key):
-		case off(key):
-			req := slices.DeleteFunc(pl.dependents(key), off)
+		if _, ok := outside[key]; ok {
+			continue
+		}
+		if off(key) {
+			req := slices.DeleteFunc(liveDeps(idx, key, pl.p.Lock.Packages), off)
+			_, manOff := disabledMan[key]
 			switch {
 			case len(req) == 0:
-			case pl.disabled(key):
+			case manOff:
 				reporter.Warn("%s is disabled, but %s requires it; MediaWiki will refuse to start (phuo enable %s)",
 					keyName(key), joinNames(req), keyName(key))
 			default:
 				reporter.Warn("%s is commented out at %s:%d, but %s requires it; MediaWiki will refuse to start",
 					keyName(key), filepath.Base(path), f.Line[key], joinNames(req))
 			}
-		default:
-			want.Add(key)
-			if !f.InBlock.Has(key) {
-				added = append(added, keyName(key))
-			}
+			continue
+		}
+		want.Add(key)
+		wantSet[key] = struct{}{}
+		if _, ok := inBlock[key]; !ok {
+			added = append(added, keyName(key))
 		}
 	}
 	for _, l := range []struct {
@@ -1478,12 +1543,12 @@ func (pl *Plan) writeLocalSettings(reporter *ui.Reporter, path string, f localse
 		names []string
 	}{{"extensions/", f.InBlock.Extensions}, {"skins/", f.InBlock.Skins}} {
 		for _, n := range l.names {
-			if !want.Has(l.typ + n) {
+			if _, ok := wantSet[l.typ+n]; !ok {
 				removed = append(removed, n)
 			}
 		}
 	}
-	changed, err := localsettings.Write(path, want)
+	changed, err := f.Write(path, want)
 	if err != nil || !changed {
 		return err
 	}
@@ -1531,10 +1596,11 @@ func lastLine(s string) string {
 	if s == "" {
 		return ""
 	}
-	if i := strings.LastIndex(s, "\n"); i >= 0 {
-		return strings.TrimSpace(s[i+1:])
+	_, line, ok := strings.CutLast(s, "\n")
+	if !ok {
+		return s
 	}
-	return s
+	return strings.TrimSpace(line)
 }
 
 func (pl *Plan) platformWarn(ctx context.Context, reporter *ui.Reporter, done []*workItem) {
@@ -1565,10 +1631,24 @@ func (pl *Plan) platformWarn(ctx context.Context, reporter *ui.Reporter, done []
 }
 
 func (pl *Plan) schemaPrompt(ctx context.Context, reporter *ui.Reporter, keys []string) {
+	if len(keys) == 0 {
+		return
+	}
+	hit := make([]bool, len(keys))
+	g := new(errgroup.Group)
+	g.SetLimit(pl.jobs())
+	for i, key := range keys {
+		g.Go(func() error {
+			ok, err := manifest.HasSchemaUpdates(pl.destPath(key))
+			hit[i] = err == nil && ok
+			return nil
+		})
+	}
+	_ = g.Wait()
 	var need []string
-	for _, key := range keys {
-		if ok, err := manifest.HasSchemaUpdates(pl.destPath(key)); err == nil && ok {
-			need = append(need, keyName(key))
+	for i, ok := range hit {
+		if ok {
+			need = append(need, keyName(keys[i]))
 		}
 	}
 	if len(need) == 0 {

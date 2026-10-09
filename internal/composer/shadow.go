@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	json "encoding/json/v2"
+	"golang.org/x/sync/errgroup"
 )
 
 type ShadowCopy struct {
@@ -40,13 +41,21 @@ func DetectShadows(root string, dirs map[string]string) ([]Shadow, error) {
 	for _, key := range slices.Sorted(maps.Keys(dirs)) {
 		sources = append(sources, source{key, filepath.Join(dirs[key], "vendor", "composer", "installed.json")})
 	}
+	pkgs := make([]map[string]string, len(sources))
+	g := new(errgroup.Group)
+	for i, s := range sources {
+		g.Go(func() error {
+			p, err := readInstalled(s.path)
+			pkgs[i] = p
+			return err
+		})
+	}
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
 	byName := map[string][]ShadowCopy{}
-	for _, s := range sources {
-		pkgs, err := readInstalled(s.path)
-		if err != nil {
-			return nil, err
-		}
-		for name, version := range pkgs {
+	for i, s := range sources {
+		for name, version := range pkgs[i] {
 			byName[name] = append(byName[name], ShadowCopy{Where: s.where, Version: version})
 		}
 	}
