@@ -16,14 +16,13 @@ var ErrAuth = errors.New("authentication required")
 
 func LsRefs(ctx context.Context, c *http.Client, repo string, prefixes ...string) (map[string]string, error) {
 	var body bytes.Buffer
-	pkt := func(s string) { fmt.Fprintf(&body, "%04x%s\n", len(s)+5, s) }
-	pkt("command=ls-refs")
-	pkt("agent=phuo")
+	pkt(&body, "command=ls-refs")
+	pkt(&body, "agent=phuo")
 	body.WriteString("0001")
-	pkt("peel")
-	pkt("symrefs")
+	pkt(&body, "peel")
+	pkt(&body, "symrefs")
 	for _, p := range prefixes {
-		pkt("ref-prefix " + p)
+		pkt(&body, "ref-prefix "+p)
 	}
 	body.WriteString("0000")
 
@@ -48,6 +47,7 @@ func LsRefs(ctx context.Context, c *http.Client, repo string, prefixes ...string
 	refs := map[string]string{}
 	rd := bufio.NewReader(res.Body)
 	var hdr [4]byte
+	var line []byte
 	for {
 		if _, err := io.ReadFull(rd, hdr[:]); err != nil {
 			return nil, err
@@ -62,7 +62,12 @@ func LsRefs(ctx context.Context, c *http.Client, repo string, prefixes ...string
 		if n <= 4 {
 			continue
 		}
-		line := make([]byte, n-4)
+		need := int(n - 4)
+		if cap(line) < need {
+			line = make([]byte, need)
+		} else {
+			line = line[:need]
+		}
 		if _, err := io.ReadFull(rd, line); err != nil {
 			return nil, err
 		}
@@ -83,3 +88,17 @@ func LsRefs(ctx context.Context, c *http.Client, repo string, prefixes ...string
 		}
 	}
 }
+
+func pkt(w *bytes.Buffer, s string) {
+	n := len(s) + 5
+	var hdr [4]byte
+	hdr[0] = youHexedHerDidntYou[n>>12]
+	hdr[1] = youHexedHerDidntYou[n>>8&0xf]
+	hdr[2] = youHexedHerDidntYou[n>>4&0xf]
+	hdr[3] = youHexedHerDidntYou[n&0xf]
+	w.Write(hdr[:])
+	w.WriteString(s)
+	w.WriteByte('\n')
+}
+
+const youHexedHerDidntYou = "0123456789abcdef"

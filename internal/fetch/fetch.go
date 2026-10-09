@@ -1,6 +1,7 @@
 package fetch
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"crypto/sha256"
@@ -27,18 +28,18 @@ var (
 	shared     *http.Client
 )
 
+var Transport http.RoundTripper = &http.Transport{
+	Proxy:                 http.ProxyFromEnvironment,
+	ForceAttemptHTTP2:     true,
+	MaxIdleConnsPerHost:   16,
+	IdleConnTimeout:       90 * time.Second,
+	ResponseHeaderTimeout: 30 * time.Second,
+}
+
 func Client() *http.Client {
 	clientOnce.Do(func() {
 		shared = &http.Client{
-			Transport: &retryTransport{base: &uaTransport{
-				base: &http.Transport{
-					ForceAttemptHTTP2:     true,
-					MaxIdleConnsPerHost:   16,
-					IdleConnTimeout:       90 * time.Second,
-					ResponseHeaderTimeout: 30 * time.Second,
-				},
-				auth: hostAuth(),
-			}},
+			Transport: &retryTransport{base: &uaTransport{base: Transport, auth: hostAuth()}},
 		}
 	})
 	return shared
@@ -187,9 +188,9 @@ func Download(ctx context.Context, url, cacheDir string, w io.Writer) (string, e
 	}
 
 	h := sha256.New()
-	writers := []io.Writer{h, w}
 	var partPath string
 	var part *os.File
+	var mw io.Writer
 	if cacheDir != "" {
 		dir := filepath.Join(cacheDir, "tarballs")
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -201,9 +202,10 @@ func Download(ctx context.Context, url, cacheDir string, w io.Writer) (string, e
 			return "", err
 		}
 		part = f
-		writers = append([]io.Writer{part}, writers...)
+		mw = io.MultiWriter(part, h, w)
+	} else {
+		mw = io.MultiWriter(h, w)
 	}
-	mw := io.MultiWriter(writers...)
 
 	// a dropped body resumes where it stopped
 	// with hash and part keep accumulating
@@ -327,7 +329,7 @@ func cacheEntry(cacheDir, url string) (blob, integrity string, ok bool) {
 	if err != nil {
 		return "", "", false
 	}
-	integrity = string(trimNL(b))
+	integrity = string(bytes.TrimRight(b, "\r\n"))
 	raw, err := base64.StdEncoding.DecodeString(strings.TrimPrefix(integrity, "sha256-"))
 	if err != nil || len(raw) != sha256.Size {
 		return "", "", false
@@ -338,11 +340,4 @@ func cacheEntry(cacheDir, url string) (blob, integrity string, ok bool) {
 func urlKey(url string) string {
 	sum := sha256.Sum256([]byte(url))
 	return hex.EncodeToString(sum[:])
-}
-
-func trimNL(b []byte) []byte {
-	for len(b) > 0 && (b[len(b)-1] == '\n' || b[len(b)-1] == '\r') {
-		b = b[:len(b)-1]
-	}
-	return b
 }

@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -89,20 +90,16 @@ func (c *Client) getJSON(ctx context.Context, q url.Values, ttl time.Duration, d
 
 func (c *Client) getBody(ctx context.Context, u string, ttl time.Duration) ([]byte, error) {
 	if ttl > 0 {
-		if e, hit := c.readCache(u); hit && time.Now().Before(e.Expires) {
-			return e.Body, nil
+		var prior cacheEntry
+		var hit bool
+		if c.CacheDir != "" && !c.NoCache {
+			prior, hit = c.readCacheFile(u)
+			if hit && (c.Offline || time.Now().Before(prior.Expires)) {
+				return prior.Body, nil
+			}
 		}
 		if c.Offline {
-			if !c.NoCache {
-				if e, hit := c.readCacheFile(u); hit {
-					return e.Body, nil
-				}
-			}
 			return nil, fmt.Errorf("offline: cache miss")
-		}
-		prior, _ := c.readCacheFile(u)
-		if c.NoCache {
-			prior = cacheEntry{}
 		}
 		return c.fetch(ctx, u, prior, ttl)
 	}
@@ -164,6 +161,9 @@ func (c *Client) fetch(ctx context.Context, u string, prior cacheEntry, ttl time
 }
 
 func checkAPIError(body []byte) error {
+	if !bytes.Contains(body, []byte(`"error"`)) {
+		return nil
+	}
 	var e struct {
 		Error *struct {
 			Code string `json:"code"`

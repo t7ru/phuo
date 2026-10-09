@@ -1,7 +1,6 @@
 package source
 
 import (
-	"bufio"
 	"bytes"
 	"cmp"
 	"context"
@@ -426,11 +425,11 @@ type gitilesEntry struct {
 
 // )]}'\n XSSI prefix on every gitiles JSON response
 func decodeGitiles(r io.Reader, v any) error {
-	br := bufio.NewReader(r)
-	if _, err := br.Discard(5); err != nil {
+	var prefix [5]byte
+	if _, err := io.ReadFull(r, prefix[:]); err != nil {
 		return err
 	}
-	return json.UnmarshalRead(br, v)
+	return json.UnmarshalRead(r, v)
 }
 
 func (r *resolver) resolveGitHub(ctx context.Context, s spec.Spec, opts ResolveOpts) (Resolved, error) {
@@ -540,7 +539,8 @@ func IsFullSHA(s string) bool {
 	if len(s) != 40 {
 		return false
 	}
-	for _, c := range s {
+	for i := 0; i < 40; i++ {
+		c := s[i]
 		if c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F' {
 			continue
 		}

@@ -9,6 +9,14 @@ import (
 
 var stamp string
 
+var buildInfo = sync.OnceValue(func() *debug.BuildInfo {
+	bi, ok := debug.ReadBuildInfo()
+	if !ok {
+		return nil
+	}
+	return bi
+})
+
 var String = sync.OnceValue(func() string {
 	if stamp != "" {
 		return stamp
@@ -17,6 +25,10 @@ var String = sync.OnceValue(func() string {
 		return v
 	}
 	return "seven"
+})
+
+var UserAgent = sync.OnceValue(func() string {
+	return "phuo/" + String() + " (+https://github.com/t7ru/phuo)"
 })
 
 func Module() string {
@@ -33,8 +45,8 @@ func Devel() bool {
 	if v := moduleVersion(); v == "" || strings.Contains(v, "+dirty") {
 		return true
 	}
-	bi, ok := debug.ReadBuildInfo()
-	if !ok {
+	bi := buildInfo()
+	if bi == nil {
 		return true
 	}
 	for _, s := range bi.Settings {
@@ -46,8 +58,8 @@ func Devel() bool {
 }
 
 func moduleVersion() string {
-	bi, ok := debug.ReadBuildInfo()
-	if !ok || bi.Main.Version == "" || bi.Main.Version == "(devel)" {
+	bi := buildInfo()
+	if bi == nil || bi.Main.Version == "" || bi.Main.Version == "(devel)" {
 		return ""
 	}
 	return bi.Main.Version
@@ -120,8 +132,4 @@ func Tag(v string) string {
 		return "v" + v
 	}
 	return v
-}
-
-func UserAgent() string {
-	return "phuo/" + String() + " (+https://github.com/t7ru/phuo)"
 }
