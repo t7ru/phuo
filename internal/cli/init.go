@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
+	"github.com/t7ru/phuo/internal/composer"
 	"github.com/t7ru/phuo/internal/localsettings"
 	"github.com/t7ru/phuo/internal/manifest"
 	"github.com/t7ru/phuo/internal/mw"
@@ -140,7 +143,7 @@ func adoptDir(dir, rel string) (pkg project.Package, manVal string, ok bool, err
 		if err := project.WriteStamp(dir, project.Stamp{SHA: sha, Ref: ref, Spec: "*"}); err != nil {
 			return pkg, "", false, err
 		}
-		return pkg, "*", true, nil
+		return finishAdopt(dir, pkg, "*")
 	}
 
 	if fi, err := os.Stat(filepath.Join(dir, ".git")); err == nil && fi.IsDir() {
@@ -163,7 +166,7 @@ func adoptDir(dir, rel string) (pkg project.Package, manVal string, ok bool, err
 		if err := project.WriteStamp(dir, project.Stamp{SHA: sha, Ref: ref, Spec: manVal}); err != nil {
 			return pkg, "", false, err
 		}
-		return pkg, manVal, true, nil
+		return finishAdopt(dir, pkg, manVal)
 	}
 
 	if _, _, err := manifest.Read(dir); err != nil {
@@ -176,7 +179,7 @@ func adoptDir(dir, rel string) (pkg project.Package, manVal string, ok bool, err
 		if manVal == "dep" {
 			manVal = "*" // `dep` is a lock-only marker and adoption makes it direct
 		}
-		return project.Package{Spec: manVal, Ref: s.Ref, SHA: s.SHA}, manVal, true, nil
+		return finishAdopt(dir, project.Package{Spec: manVal, Ref: s.Ref, SHA: s.SHA}, manVal)
 	}
 	// bundled at core's REL with no gitinfo.json
 	// stamp so `install` doesn't replace them
@@ -184,7 +187,38 @@ func adoptDir(dir, rel string) (pkg project.Package, manVal string, ok bool, err
 	if err := project.WriteStamp(dir, project.Stamp{Ref: rel, Spec: "*"}); err != nil {
 		return pkg, "", false, err
 	}
-	return project.Package{Spec: "*", Ref: rel}, "*", true, nil
+	return finishAdopt(dir, project.Package{Spec: "*", Ref: rel}, "*")
+}
+
+func finishAdopt(dir string, pkg project.Package, manVal string) (project.Package, string, bool, error) {
+	man, _, err := manifest.Read(dir)
+	if err != nil {
+		if _, extErr := os.Stat(filepath.Join(dir, "extension.json")); errors.Is(extErr, fs.ErrNotExist) {
+			if _, skinErr := os.Stat(filepath.Join(dir, "skin.json")); errors.Is(skinErr, fs.ErrNotExist) {
+				return pkg, manVal, true, nil
+			}
+		}
+		return pkg, "", false, err
+	}
+	pkg.Version = man.Version
+	pkg.Requires = project.Requires{
+		MediaWiki:  man.Requires.MediaWiki,
+		Extensions: man.Requires.Extensions,
+		Skins:      man.Requires.Skins,
+	}
+	for name := range man.Requires.Extensions {
+		pkg.Dependencies = append(pkg.Dependencies, "extensions/"+name)
+	}
+	for name := range man.Requires.Skins {
+		pkg.Dependencies = append(pkg.Dependencies, "skins/"+name)
+	}
+	slices.Sort(pkg.Dependencies)
+	mode, err := composer.Detect(dir, man)
+	if err != nil {
+		return pkg, "", false, err
+	}
+	pkg.Composer = string(mode)
+	return pkg, manVal, true, nil
 }
 
 func gitSpec(url, ref string) string {
