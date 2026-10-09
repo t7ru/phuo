@@ -50,11 +50,7 @@ type Manifest struct {
 }
 
 func Read(dir string) (Manifest, string, error) {
-	path, kind, err := findManifest(dir)
-	if err != nil {
-		return Manifest{}, "", err
-	}
-	b, err := os.ReadFile(path)
+	b, kind, err := readManifest(dir)
 	if err != nil {
 		return Manifest{}, "", err
 	}
@@ -65,16 +61,22 @@ func Read(dir string) (Manifest, string, error) {
 	return m, kind, nil
 }
 
-func findManifest(dir string) (path, kind string, err error) {
-	ext := filepath.Join(dir, "extension.json")
-	if _, err := os.Stat(ext); err == nil {
-		return ext, "extensions", nil
+func readManifest(dir string) ([]byte, string, error) {
+	b, err := os.ReadFile(filepath.Join(dir, "extension.json"))
+	if err == nil {
+		return b, "extensions", nil
 	}
-	skin := filepath.Join(dir, "skin.json")
-	if _, err := os.Stat(skin); err == nil {
-		return skin, "skins", nil
+	if !errors.Is(err, fs.ErrNotExist) {
+		return nil, "", err
 	}
-	return "", "", fmt.Errorf("no extension.json or skin.json in %s", dir)
+	b, err = os.ReadFile(filepath.Join(dir, "skin.json"))
+	if err == nil {
+		return b, "skins", nil
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, "", fmt.Errorf("no extension.json or skin.json in %s", dir)
+	}
+	return nil, "", err
 }
 
 type ver [4]int
@@ -272,14 +274,14 @@ type schemaProbe struct {
 }
 
 func HasSchemaUpdates(dir string) (bool, error) {
-	path, _, err := findManifest(dir)
+	b, _, err := readManifest(dir)
 	if err != nil {
 		return false, err
 	}
-	b, err := os.ReadFile(path)
-	if err != nil {
-		return false, err
-	}
+	return schemaUpdates(b)
+}
+
+func schemaUpdates(b []byte) (bool, error) {
 	var p schemaProbe
 	if err := json.Unmarshal(b, &p); err != nil {
 		return false, err
