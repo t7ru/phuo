@@ -66,9 +66,9 @@ func Parse(s string) (Spec, error) {
 			p.Name = s
 		}
 	case strings.HasPrefix(s, "github:"):
-		p.Kind, p.Repo = GitHub, s[7:]
+		p.Kind, p.Repo = GitHub, strings.TrimSuffix(s[7:], "/")
 	case strings.HasPrefix(s, "gitlab:"):
-		p.Kind, p.Repo = GitLab, s[7:]
+		p.Kind, p.Repo = GitLab, strings.TrimSuffix(s[7:], "/")
 	case strings.HasPrefix(s, "git+"), strings.HasPrefix(s, "git@"), strings.HasSuffix(s, ".git"):
 		p.Kind, p.Repo = Git, s // keep git+ so String round-trips
 	case strings.HasPrefix(s, "file:"):
@@ -80,7 +80,7 @@ func Parse(s string) (Spec, error) {
 	}
 	if p.Kind == GitHub || p.Kind == GitLab {
 		o, r, ok := strings.Cut(p.Repo, "/")
-		if !ok || o == "" || r == "" || strings.Contains(r, "/") {
+		if !ok || o == "" || r == "" || (p.Kind == GitHub && strings.Contains(r, "/")) {
 			kind := "github"
 			if p.Kind == GitLab {
 				kind = "gitlab"
