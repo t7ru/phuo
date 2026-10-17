@@ -276,6 +276,15 @@ func Render(b []byte, want Loads) ([]byte, error) {
 	case start < 0 && block == "":
 		return b, nil
 	case start < 0:
+		// a block after a closing ?> would be emitted as text instead of run
+		if t := bytes.TrimRight(b, " \t\r\n"); bytes.HasSuffix(t, []byte("?>")) {
+			i := len(t) - 2
+			pre := b[:i]
+			if len(pre) > 0 && pre[len(pre)-1] != '\n' {
+				return slices.Concat(pre, []byte(nl), []byte(block), b[i:]), nil
+			}
+			return slices.Concat(pre, []byte(block), b[i:]), nil
+		}
 		out := slices.Clone(b)
 		// a trailing lone '\r' counts as a line end
 		// appending '\n' would turn it into CRLF and flip crlf next run
