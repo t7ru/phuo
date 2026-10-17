@@ -434,6 +434,10 @@ func cutCall(b []byte, from, to int) []byte {
 	if onlySpace {
 		return slices.Concat(b[:ls], b[le:])
 	}
+	// keep the ; so a braceless if/else doesn't capture the next statement
+	if pre := bytes.TrimRight(b[:from], " \t"); bytes.HasSuffix(pre, []byte(")")) || bytes.HasSuffix(pre, []byte("else")) {
+		return slices.Concat(b[:from], b[to:])
+	}
 	return slices.Concat(b[:from], b[end:])
 }
 
