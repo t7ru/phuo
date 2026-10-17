@@ -27,7 +27,7 @@ const (
 )
 
 var (
-	loadRe = regexp.MustCompile(`wfLoad(Extension|Skin)s?` + gap + `\(` + gap +
+	loadRe = regexp.MustCompile(`(?i:wfLoad(Extension|Skin)s?)` + gap + `\(` + gap +
 		`(?:\[` + gap + names + gap + `\]` +
 		`|array` + gap + `\(` + gap + names + gap + `\)` +
 		`|(['"][^'"]*['"])(?:` + gap + `,(?:[^;()]|\((?:[^;()]|\([^;()]*\))*\))*)?)` + gap + `\)`)
@@ -125,7 +125,7 @@ func ScanBytes(b []byte) (File, error) {
 			bit = disabled
 		}
 		typ := "extensions/"
-		if b[m[2]] == 'S' {
+		if b[m[2]]|0x20 == 's' {
 			typ = "skins/"
 		}
 		var lo, hi int
@@ -344,7 +344,7 @@ func Drop(b []byte, keys []string) ([]byte, error) {
 			continue
 		}
 		typ := "extensions/"
-		if b[m[2]] == 'S' {
+		if b[m[2]]|0x20 == 's' {
 			typ = "skins/"
 		}
 		var kept []string
