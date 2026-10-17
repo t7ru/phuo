@@ -2,6 +2,7 @@ package localsettings
 
 import (
 	"bytes"
+	"cmp"
 	"errors"
 	"fmt"
 	"os"
@@ -356,13 +357,24 @@ func Drop(b []byte, keys []string) ([]byte, error) {
 	return b, nil
 }
 
+// names are matched between comments
+// an odd quote in a comment would shift the pairing
 func loadNames(b []byte, lo, hi int, cm [][2]int, skipCommented bool) []string {
 	var names []string
-	for _, n := range nameRe.FindAllSubmatchIndex(b[lo:hi], -1) {
-		if skipCommented && commented(cm, lo+n[0]) {
-			continue
+	add := func(lo, hi int) {
+		for _, n := range nameRe.FindAllSubmatch(b[lo:hi], -1) {
+			names = append(names, string(n[1]))
 		}
-		names = append(names, string(b[lo+n[2]:lo+n[3]]))
+	}
+	if skipCommented {
+		i, _ := slices.BinarySearchFunc(cm, lo, func(r [2]int, p int) int { return cmp.Compare(r[1], p+1) })
+		for ; i < len(cm) && cm[i][0] < hi; i++ {
+			add(lo, cm[i][0])
+			lo = cm[i][1]
+		}
+	}
+	if lo < hi {
+		add(lo, hi)
 	}
 	return names
 }
