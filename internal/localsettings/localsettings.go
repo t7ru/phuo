@@ -15,10 +15,6 @@ type Loads struct {
 	Extensions, Skins []string
 }
 
-type Settings struct {
-	ExtensionDirectory, StyleDirectory, Server, ScriptPath, DefaultSkin string
-}
-
 const (
 	blockStart = "// >>> phuo (managed block, edit phuo.json instead)"
 	blockEnd   = "// <<< phuo"
@@ -32,19 +28,15 @@ var (
 		`|array` + gap + `\(` + gap + names + gap + `\)` +
 		`|(['"][^'"]*['"])(?:` + gap + `,(?:[^;()]|\((?:[^;()]|\([^;()]*\))*\))*)?)` + gap + `\)`)
 	nameRe    = regexp.MustCompile(`['"]([^'"]+)['"]`)
-	settingRe = regexp.MustCompile(
-		`\$wg(ExtensionDirectory|StyleDirectory|Server|ScriptPath|DefaultSkin)\s*=\s*(?:'([^'$]*)'|"([^"$]*)")\s*;`,
-	)
 	heredocRe = regexp.MustCompile(`^<<<[ \t]*["']?([A-Za-z_]\w*)["']?\r?\n`)
 )
 
 type File struct {
 	Outside  Loads // active loads the user wrote; phuo never duplicates or touches them
 	InBlock  Loads
-	Disabled Loads // commented-out user loads; phuo treats them as deliberately off
-	Settings
-	Line map[string]int // key -> line of its user-written load (active, else commented)
-	raw  []byte
+	Disabled Loads          // commented-out user loads
+	Line     map[string]int // key -> line of its user-written load (active, else commented)
+	raw      []byte
 }
 
 func (l Loads) Has(key string) bool {
@@ -154,29 +146,6 @@ func ScanBytes(b []byte) (File, error) {
 			f.InBlock.Add(key)
 		default:
 			f.Disabled.Add(key)
-		}
-	}
-	s := &f.Settings
-	for _, m := range settingRe.FindAllSubmatchIndex(b, -1) {
-		if commented(cm, m[0]) {
-			continue
-		}
-		v := m[4:6]
-		if v[0] < 0 {
-			v = m[6:8]
-		}
-		val := string(b[v[0]:v[1]])
-		switch string(b[m[2]:m[3]]) {
-		case "ExtensionDirectory":
-			s.ExtensionDirectory = val
-		case "StyleDirectory":
-			s.StyleDirectory = val
-		case "Server":
-			s.Server = val
-		case "ScriptPath":
-			s.ScriptPath = val
-		case "DefaultSkin":
-			s.DefaultSkin = val
 		}
 	}
 	f.raw = b
