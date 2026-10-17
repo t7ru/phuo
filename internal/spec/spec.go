@@ -193,9 +193,9 @@ func isPinSHA(s string) bool {
 }
 
 func deriveName(repo string) string {
-	s := strings.TrimPrefix(repo, "git+")
+	s, _, _ := strings.Cut(strings.TrimPrefix(repo, "git+"), "?")
 	s = strings.TrimSuffix(s, "/")
-	if i := strings.LastIndexAny(s, "/:"); i >= 0 {
+	if i := strings.LastIndexAny(s, `/:\`); i >= 0 {
 		s = s[i+1:]
 	}
 	s = strings.TrimSuffix(s, ".git")
