@@ -52,6 +52,32 @@ func (c *InitCmd) Run(ctx context.Context, cli *CLI) error {
 		Packages:  map[string]project.Package{},
 	}
 
+	dirs := map[string]string{"extensions": "extensions", "skins": "skins"}
+	if php := (mw.PHP{Root: root}); php.Available() {
+		cfg, err := php.Config(ctx, "wgExtensionDirectory", "wgStyleDirectory")
+		if err != nil {
+			rep.Warn("php: %s; assuming extensions/ and skins/", firstLine(err.Error()))
+		}
+		for typ, key := range map[string]string{"extensions": "wgExtensionDirectory", "skins": "wgStyleDirectory"} {
+			v, _ := cfg[key].(string)
+			if v == "" {
+				continue
+			}
+			rel, err := filepath.Rel(root, v)
+			if err != nil {
+				rep.Warn("$%s=%s is not reachable from %s; set paths.%s in phuo.json", key, v, root, typ)
+				continue
+			}
+			dirs[typ] = rel
+		}
+		if dirs["extensions"] != "extensions" {
+			m.Paths.Extensions = filepath.ToSlash(dirs["extensions"])
+		}
+		if dirs["skins"] != "skins" {
+			m.Paths.Skins = filepath.ToSlash(dirs["skins"])
+		}
+	}
+
 	// release tarball is like ~40 bundled packages
 	// unloaded ones are adopted as disabled so
 	// the managed block doesn't switch them all on
@@ -61,7 +87,7 @@ func (c *InitCmd) Run(ctx context.Context, cli *CLI) error {
 	}
 	var adopted, unknown []string
 	scan := func(typ string) error {
-		entries, err := os.ReadDir(filepath.Join(root, typ))
+		entries, err := os.ReadDir(filepath.Join(root, dirs[typ]))
 		if err != nil {
 			if errors.Is(err, os.ErrNotExist) {
 				return nil
@@ -74,7 +100,7 @@ func (c *InitCmd) Run(ctx context.Context, cli *CLI) error {
 			if !e.IsDir() || strings.HasPrefix(name, ".") {
 				continue
 			}
-			pkg, manVal, ok, err := adoptDir(filepath.Join(root, typ, name), project.Rel(ver))
+			pkg, manVal, ok, err := adoptDir(filepath.Join(root, dirs[typ], name), project.Rel(ver))
 			if err != nil {
 				return err
 			}
