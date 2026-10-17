@@ -35,6 +35,7 @@ var (
 	settingRe = regexp.MustCompile(
 		`\$wg(ExtensionDirectory|StyleDirectory|Server|ScriptPath|DefaultSkin)\s*=\s*(?:'([^'$]*)'|"([^"$]*)")\s*;`,
 	)
+	heredocRe = regexp.MustCompile(`^<<<[ \t]*["']?([A-Za-z_]\w*)["']?\r?\n`)
 )
 
 type File struct {
@@ -191,6 +192,16 @@ func comments(b []byte) (r [][2]int, err error) {
 	}
 	for i := 0; i < len(b); i++ {
 		switch c := b[i]; {
+		case c == '<' && bytes.HasPrefix(b[i:], []byte("<<<")):
+			m := heredocRe.FindSubmatchIndex(b[i:])
+			if m == nil {
+				continue
+			}
+			end := regexp.MustCompile(`(?m)^[ \t]*` + string(b[i+m[2]:i+m[3]]) + `\b`).FindIndex(b[i+m[1]:])
+			if end == nil {
+				return r, nil
+			}
+			i += m[1] + end[1] - 1
 		case c == '\'' || c == '"':
 			for i++; i < len(b) && b[i] != c; i++ {
 				if b[i] == '\\' {
