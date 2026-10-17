@@ -29,7 +29,7 @@ var (
 	loadRe = regexp.MustCompile(`wfLoad(Extension|Skin)s?` + gap + `\(` + gap +
 		`(?:\[` + gap + names + gap + `\]` +
 		`|array` + gap + `\(` + gap + names + gap + `\)` +
-		`|` + names + `)` + gap + `\)`)
+		`|(['"][^'"]*['"])(?:` + gap + `,(?:[^;()]|\((?:[^;()]|\([^;()]*\))*\))*)?)` + gap + `\)`)
 	nameRe    = regexp.MustCompile(`['"]([^'"]+)['"]`)
 	settingRe = regexp.MustCompile(
 		`\$wg(ExtensionDirectory|StyleDirectory|Server|ScriptPath|DefaultSkin)\s*=\s*(?:'([^'$]*)'|"([^"$]*)")\s*;`,
