@@ -44,8 +44,9 @@ func Parse(s string) (Spec, error) {
 		p.Skin = p.Skin || skin
 		s = norm
 	}
-	// "Alias@<source>" but not "git@host:..." and not a credentialed URL ("https://u:p@host")
-	if !strings.HasPrefix(s, "git@") && !strings.Contains(s, "://") {
+	// "Alias@<source>" but not "git@host:..."
+	// a credentialed URL ("https://u:p@host") fails nameRe
+	if !strings.HasPrefix(s, "git@") {
 		if name, src, ok := strings.Cut(s, "@"); ok && nameRe.MatchString(name) {
 			p.Name, s = name, src
 		}
