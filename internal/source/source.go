@@ -42,7 +42,8 @@ type Resolved struct {
 
 // stops resolve so install can ask before rewriting phuo.json
 type OffDist struct {
-	Spec spec.Spec
+	Spec   spec.Spec
+	Policy string
 }
 
 func (e *OffDist) Error() string {
@@ -157,7 +158,7 @@ func (r *resolver) resolveRegistry(ctx context.Context, s spec.Spec, opts Resolv
 			if host == "gitlab" {
 				sp.Kind = spec.GitLab
 			}
-			return Resolved{}, &OffDist{Spec: sp}
+			return Resolved{}, &OffDist{Spec: sp, Policy: p.Kind}
 		}
 	}
 	if typ == "" {
@@ -261,6 +262,11 @@ func selectRef(name, pinned string, opts ResolveOpts, policy string, refs map[st
 				if policy == "ltsrel" {
 					rec = opts.LTSRel
 				}
+				if rec != "" {
+					if _, ok := refs[rec]; !ok {
+						rec = ""
+					}
+				}
 				if rec != "" && rec != opts.Rel {
 					hint = fmt.Sprintf("%s follows the %s policy; its maintainer recommends %s (phuo add %s@%s)",
 						name, policy, rec, name, rec)
@@ -284,7 +290,9 @@ func selectRef(name, pinned string, opts ResolveOpts, policy string, refs map[st
 			if _, ok := refs[opts.LTSRel]; ok {
 				return opts.LTSRel, "", nil
 			}
+			return "", "", fmt.Errorf("%s follows the ltsrel policy, but %s is not available (available: %s)", name, opts.LTSRel, list)
 		}
+		return "", "", fmt.Errorf("%s follows the ltsrel policy, but no LTS ref is known (available: %s)", name, list)
 	}
 	if best := nearestREL(refs, opts.Rel); best != "" {
 		return "", "", fmt.Errorf("no suitable ref for %s (available: %s); try phuo add %s@%s", name, list, name, best)

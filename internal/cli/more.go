@@ -437,6 +437,14 @@ func (c *InfoCmd) Run(ctx context.Context, cli *CLI) error {
 		return err
 	}
 
+	var man manifest.Manifest
+	manOK := false
+	if installed {
+		var err error
+		man, _, err = manifest.Read(packageDir(p, key))
+		manOK = err == nil
+	}
+
 	var br registry.Branches
 	var pol registry.Policy
 	found := false
@@ -447,6 +455,10 @@ func (c *InfoCmd) Run(ctx context.Context, cli *CLI) error {
 			return err
 		}
 		useReg = sp.Kind == spec.Registry
+	}
+	pageName := name
+	if !useReg && man.Name != "" {
+		pageName = man.Name
 	}
 	if useReg {
 		exts, skins := []string{name}, []string{name}
@@ -479,15 +491,32 @@ func (c *InfoCmd) Run(ctx context.Context, cli *CLI) error {
 				return polErr
 			}
 			pol = pols[key]
-		} else if !installed {
+		} else if installed {
+			pol = pols[key]
+			found = pol.Found
+		} else {
 			msg := fmt.Sprintf("Unknown extension/skin %q", c.Name)
 			if sug := reg.Suggest(name); len(sug) > 0 {
 				msg += fmt.Sprintf(". Did you mean %s?", sug[0])
 			}
 			return userErr(msg)
 		}
+	} else if installed {
+		exts, skins := []string{pageName}, []string{pageName}
+		if typ == "skins" {
+			exts = nil
+		} else {
+			skins = nil
+		}
+		if pols, err := reg.Policies(ctx, exts, skins); err == nil {
+			pol = pols[typ+"/"+pageName]
+			found = pol.Found
+		}
 	}
-	kind := cmp.Or(pol.Kind, lp.Policy, "rel")
+	kind := lp.Policy
+	if pol.Found {
+		kind = pol.Kind
+	}
 	type infoRequires struct {
 		MediaWiki  string            `json:"MediaWiki,omitzero"`
 		Platform   map[string]any    `json:"platform,omitzero"`
@@ -645,7 +674,7 @@ func (c *InfoCmd) Run(ctx context.Context, cli *CLI) error {
 		out.Issues = "https://phabricator.wikimedia.org/tag/" + strings.ToLower(pol.Phabricator) + "/"
 	}
 	if found {
-		out.Page = registry.PageURL(p.Manifest.Registry, typ, name)
+		out.Page = registry.PageURL(p.Manifest.Registry, typ, pageName)
 	}
 	if pol.Author != "" {
 		out.Authors = []string{pol.Author}
@@ -657,7 +686,7 @@ func (c *InfoCmd) Run(ctx context.Context, cli *CLI) error {
 		out.Ref = lp.Ref
 		out.Enabled = loadState(p, scanLocalSettings(p), key)
 		dir := packageDir(p, key)
-		if man, _, err := manifest.Read(dir); err == nil {
+		if manOK {
 			out.Homepage = man.URL
 			out.License = cmp.Or(man.License, out.License)
 			if len(man.Author) > 0 {

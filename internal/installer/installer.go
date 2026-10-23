@@ -787,10 +787,15 @@ func (pl *Plan) prepareItem(ctx context.Context, it *workItem, resolver source.R
 	}
 
 	res, err := resolver.Resolve(ctx, it.spec, ropts)
+	fromOffDist := false
 	if off, ok := errors.AsType[*source.OffDist](err); ok {
 		if pl.opts.Ask != nil && pl.opts.Ask(fmt.Sprintf("use %s instead? phuo cannot find it on ExtensionDistributor", off.Spec.String())) {
+			fromOffDist = true
 			it.spec = off.Spec
 			res, err = resolver.Resolve(ctx, it.spec, ropts)
+			if err == nil {
+				res.Policy = off.Policy
+			}
 		} else if pl.opts.Update && haveLock && stampMatch(pl.destPath(it.key), lp) {
 			it.keep, it.warn = true, off.Error()
 			return nil
@@ -819,6 +824,10 @@ func (pl *Plan) prepareItem(ctx context.Context, it *workItem, resolver source.R
 		}
 	} else {
 		it.lockSpec = "dep"
+	}
+
+	if !fromOffDist && it.res.Policy == "" && (it.spec.Kind == spec.GitHub || it.spec.Kind == spec.GitLab) && it.lockSpec == lp.Spec {
+		it.res.Policy = lp.Policy
 	}
 
 	if pl.opts.Update && haveLock && lp.SHA != "" && lp.SHA == res.SHA && !pl.opts.Force && it.lockSpec == lp.Spec {

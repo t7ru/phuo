@@ -37,6 +37,7 @@ type Branches struct {
 }
 
 type Policy struct {
+	Found          bool
 	Kind           string
 	Status         string
 	Description    string
@@ -343,7 +344,7 @@ func (c *Client) Policies(ctx context.Context, exts, skins []string) (map[string
 			}
 			byTitle := map[string]Policy{}
 			for _, pg := range r.Query.Pages {
-				p := Policy{Kind: "rel"}
+				p := Policy{}
 				if !pg.Missing && len(pg.Revisions) > 0 {
 					p = parsePolicy(pg.Revisions[0].Slots.Main.Content)
 				}
@@ -358,7 +359,7 @@ func (c *Client) Policies(ctx context.Context, exts, skins []string) (map[string
 				}
 				p, ok := byTitle[title]
 				if !ok {
-					p = Policy{Kind: "rel"}
+					p = Policy{}
 				}
 				out[w.key] = p
 				c.writePolicyCache(w.title, p)
@@ -370,7 +371,7 @@ func (c *Client) Policies(ctx context.Context, exts, skins []string) (map[string
 }
 
 func parsePolicy(wikitext string) Policy {
-	p := Policy{Kind: "rel"}
+	p := Policy{Found: true}
 	if m := rePolicy.FindStringSubmatch(wikitext); m != nil {
 		p.Kind = strings.ToLower(m[1])
 	}
