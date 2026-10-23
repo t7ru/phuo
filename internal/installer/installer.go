@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -81,6 +83,7 @@ type Plan struct {
 	add    []spec.Spec
 	remove []string
 	opts   Options
+	down   sync.Map
 }
 
 type Summary struct {
@@ -97,7 +100,8 @@ type workItem struct {
 	man           manifest.Manifest
 	integrity     string
 	integrityWarn bool
-	fallback404   bool
+	fallback      bool
+	hostWarn      string
 	fromSHA       string
 	pkgRoot       string
 	tmpDir        string
@@ -295,8 +299,11 @@ func (pl *Plan) applyInstall(ctx context.Context, reporter *ui.Reporter) (Summar
 		var resolved atomic.Int64
 		for _, it := range round {
 			g.Go(func() error {
+				reporter.Progress("resolving %s...", it.spec.Name)
 				err := pl.prepareItem(gctx, it, resolver, ropts, cacheDir)
-				reporter.Progress("resolved %d/%d packages (%s)...", resolved.Add(1), len(round), it.spec.Name)
+				if err == nil {
+					reporter.Progress("resolved %d/%d packages", resolved.Add(1), len(round))
+				}
 				return err
 			})
 		}
@@ -314,7 +321,10 @@ func (pl *Plan) applyInstall(ctx context.Context, reporter *ui.Reporter) (Summar
 				pl.keepItem(it, seen, &queue, &done)
 				continue
 			}
-			if it.fallback404 {
+			if it.fallback {
+				if it.hostWarn != "" {
+					reporter.Warn("%s", it.hostWarn)
+				}
 				reporter.Warn("%s: snapshot tarball unavailable, rebuilt from source at %s", it.res.Name, shortSHA(it.res.SHA))
 			} else if it.integrityWarn {
 				reporter.Warn("%s: integrity mismatch (updating lock)", it.res.Name)
@@ -900,7 +910,7 @@ func (pl *Plan) fetchFromLock(ctx context.Context, it *workItem, lp project.Pack
 	if err := pl.fetchArchive(ctx, it, cacheDir); err != nil {
 		return err
 	}
-	if lp.Integrity != "" && it.integrity != lp.Integrity && !it.fallback404 {
+	if lp.Integrity != "" && it.integrity != lp.Integrity && !it.fallback {
 		if !pl.opts.Force {
 			os.RemoveAll(it.tmpDir)
 			return fmt.Errorf("%s: integrity mismatch", name)
@@ -910,8 +920,31 @@ func (pl *Plan) fetchFromLock(ctx context.Context, it *workItem, lp project.Pack
 	return nil
 }
 
-func isHTTP404(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "HTTP 404")
+type transfer struct{ err error }
+
+func (e *transfer) Error() string { return e.err.Error() }
+func (e *transfer) Unwrap() error { return e.err }
+
+func (pl *Plan) strike(rawURL string, err error) (host string, first bool) {
+	var he *fetch.HTTPError
+	if errors.As(err, &he) && he.Status != http.StatusTooManyRequests && he.Status < 500 {
+		return "", false
+	}
+	u, uerr := url.Parse(rawURL)
+	if uerr != nil {
+		return "", false
+	}
+	_, dup := pl.down.LoadOrStore(u.Host, struct{}{})
+	return u.Host, !dup
+}
+
+func (pl *Plan) hostDown(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	_, ok := pl.down.Load(u.Host)
+	return ok
 }
 
 func (pl *Plan) fetchArchive(ctx context.Context, it *workItem, cacheDir string) error {
@@ -921,16 +954,29 @@ func (pl *Plan) fetchArchive(ctx context.Context, it *workItem, cacheDir string)
 	}
 	it.tmpDir = filepath.Join(parent, ".phuo-tmp", it.res.Name)
 	os.RemoveAll(it.tmpDir)
-	integrity, err := fetchInto(ctx, it.res, it.tmpDir, cacheDir)
+
+	src := ""
+	if it.res.SHA != "" && it.res.Source != "" {
+		if fb, ok := source.ArchiveAt(it.res.Source, it.res.SHA); ok && fb != it.res.Archive {
+			src = fb
+		}
+	}
+	if src != "" && pl.hostDown(it.res.Archive) {
+		if _, ok := fetch.Cached(cacheDir, it.res.Archive); !ok {
+			it.res.Archive, it.fallback, src = src, true, ""
+		}
+	}
+
 	// extdist lists branch tips before their tarballs exist
 	// therefore a snapshot URL can 404
-	if isHTTP404(err) && it.res.SHA != "" && it.res.Source != "" {
-		if fb, ok := source.ArchiveAt(it.res.Source, it.res.SHA); ok && fb != it.res.Archive {
-			os.RemoveAll(it.tmpDir)
-			it.res.Archive = fb
-			it.fallback404 = true
-			integrity, err = fetchInto(ctx, it.res, it.tmpDir, cacheDir)
+	integrity, err := fetchInto(ctx, it.res, it.tmpDir, cacheDir)
+	if err != nil && src != "" && ctx.Err() == nil {
+		if host, first := pl.strike(it.res.Archive, err); first {
+			it.hostWarn = fmt.Sprintf("%s is unreachable; phuo will try git archives", host)
 		}
+		os.RemoveAll(it.tmpDir)
+		it.res.Archive, it.fallback = src, true
+		integrity, err = fetchInto(ctx, it.res, it.tmpDir, cacheDir)
 	}
 	if err != nil {
 		os.RemoveAll(it.tmpDir)
@@ -976,7 +1022,7 @@ func fetchInto(ctx context.Context, res source.Resolved, tmp, cacheDir string) (
 		f.Close()
 		if err != nil {
 			os.Remove(zf)
-			return "", fmt.Errorf("%s: %w", res.Name, err)
+			return "", &transfer{fmt.Errorf("%s: %w", res.Name, err)}
 		}
 		err = archive.ExtractZip(zf, root)
 		os.Remove(zf)
@@ -993,13 +1039,13 @@ func fetchInto(ctx context.Context, res source.Resolved, tmp, cacheDir string) (
 		pr.CloseWithError(err)
 		xerr <- err
 	}()
-	integrity, err := fetch.Download(ctx, res.Archive, cacheDir, pw)
-	pw.CloseWithError(err)
-	if e := <-xerr; e != nil {
-		err = e
+	integrity, dlErr := fetch.Download(ctx, res.Archive, cacheDir, pw)
+	pw.CloseWithError(dlErr)
+	if e := <-xerr; e != nil && dlErr == nil {
+		return "", fmt.Errorf("%s: %w", res.Name, e)
 	}
-	if err != nil {
-		return "", fmt.Errorf("%s: %w", res.Name, err)
+	if dlErr != nil {
+		return "", &transfer{fmt.Errorf("%s: %w", res.Name, dlErr)}
 	}
 	return integrity, nil
 }

@@ -234,9 +234,9 @@ func Download(ctx context.Context, url, cacheDir string, w io.Writer) (string, e
 		}
 		if res.StatusCode != http.StatusOK && res.StatusCode != http.StatusPartialContent {
 			res.Body.Close()
-			return "", failDownload(part, partPath, fmt.Errorf("%s: HTTP %d", url, res.StatusCode))
+			return "", failDownload(part, partPath, &HTTPError{URL: url, Status: res.StatusCode})
 		}
-		n, err := io.Copy(mw, res.Body)
+		n, err := copyBody(mw, res.Body)
 		res.Body.Close()
 		received += n
 		if err == nil {
@@ -282,6 +282,33 @@ func failDownload(part *os.File, partPath string, err error) error {
 		os.Remove(partPath)
 	}
 	return err
+}
+
+type HTTPError struct {
+	URL    string
+	Status int
+}
+
+func (e *HTTPError) Error() string { return fmt.Sprintf("%s: HTTP %d", e.URL, e.Status) }
+
+// close unblocks the stalled read
+// retry can resume via Range
+const stallTimeout = time.Minute
+
+func copyBody(w io.Writer, body io.ReadCloser) (int64, error) {
+	t := time.AfterFunc(stallTimeout, func() { body.Close() })
+	defer t.Stop()
+	return io.Copy(w, &heartbeat{r: body, t: t})
+}
+
+type heartbeat struct {
+	r io.Reader
+	t *time.Timer
+}
+
+func (h *heartbeat) Read(p []byte) (int, error) {
+	h.t.Reset(stallTimeout)
+	return h.r.Read(p)
 }
 
 // same as Download except the blob read
