@@ -718,8 +718,8 @@ func (pl *Plan) alignShadows(ctx context.Context, reporter *ui.Reporter) error {
 	}
 	bin, _ := pl.p.Manifest.Composer.Value("composer")
 	aligned, err := composer.Align(ctx, bin, pl.p.Root, pl.vendoredDirs(), nil)
-	if aligned {
-		reporter.Step("composer: aligned shadowed packages to core")
+	for _, line := range aligned {
+		reporter.Step("composer: aligned %s", line)
 	}
 	return err
 }
@@ -737,7 +737,7 @@ func (pl *Plan) reportAlign(reporter *ui.Reporter) error {
 		if rerr != nil {
 			rel = dir
 		}
-		reporter.Info("would align %s: %s", filepath.ToSlash(rel), strings.Join(pins, " "))
+		reporter.Info("would align %s (%s)", filepath.ToSlash(rel), strings.Join(pins, "; "))
 	}
 	return nil
 }

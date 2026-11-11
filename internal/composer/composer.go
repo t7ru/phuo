@@ -139,7 +139,7 @@ func runPlan(ctx context.Context, root, bin string, p Plan, out io.Writer, needU
 }
 
 // asingle package often cannot move while another lock entry want an old major
-func Align(ctx context.Context, bin, root string, dirs []string, out io.Writer) (bool, error) {
+func Align(ctx context.Context, bin, root string, dirs []string, out io.Writer) ([]string, error) {
 	if bin == "" {
 		bin = "composer"
 	}
@@ -151,24 +151,24 @@ func Align(ctx context.Context, bin, root string, dirs []string, out io.Writer) 
 	for _, dir := range dirs {
 		pins, err := PinArgs(root, dir)
 		if err != nil {
-			return false, err
+			return nil, err
 		}
 		if len(pins) > 0 {
 			jobs = append(jobs, job{dir, pins})
 		}
 	}
 	if len(jobs) == 0 {
-		return false, nil
+		return nil, nil
 	}
 	if _, err := exec.LookPath(bin); err != nil {
 		cmds := make([]string, len(jobs))
 		for i, j := range jobs {
 			cmds[i] = bin + " require --no-interaction --update-no-dev -W " + strings.Join(j.pins, " ")
 		}
-		return false, fmt.Errorf("%s not found; run: %s", bin, strings.Join(cmds, "; "))
+		return nil, fmt.Errorf("%s not found; run: %s", bin, strings.Join(cmds, "; "))
 	}
 	var errs []error
-	did := false
+	var done []string
 	for _, j := range jobs {
 		rel, rerr := filepath.Rel(root, j.dir)
 		if rerr != nil {
@@ -186,12 +186,12 @@ func Align(ctx context.Context, bin, root string, dirs []string, out io.Writer) 
 			if msg == "" {
 				msg = err.Error()
 			}
-			errs = append(errs, fmt.Errorf("%s: composer cannot match core (%s):\n%s", rel, strings.Join(j.pins, " "), msg))
+			errs = append(errs, fmt.Errorf("%s: composer cannot match core (%s):\n%s", rel, strings.Join(j.pins, "; "), msg))
 			continue
 		}
-		did = true
+		done = append(done, rel+" ("+strings.Join(j.pins, "; ")+")")
 	}
-	return did, errors.Join(errs...)
+	return done, errors.Join(errs...)
 }
 
 func globTouched(include, adds, removes []string) bool {
