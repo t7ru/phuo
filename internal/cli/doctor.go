@@ -314,7 +314,7 @@ func doctorShadows(p *project.Project, warn func(string, ...any)) {
 		return
 	}
 	for _, s := range shadows {
-		warn("%s (load order decides which copy wins)", s)
+		warn("%s (%s)", s, s.Note())
 	}
 }
 

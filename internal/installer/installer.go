@@ -707,9 +707,54 @@ func (pl *Plan) warnShadows(reporter *ui.Reporter, done []*workItem) {
 	}
 	for _, s := range shadows {
 		if slices.ContainsFunc(s.Copies, func(c composer.ShadowCopy) bool { return touched[c.Where] }) {
-			reporter.Warn("%s (load order decides which copy wins)", s)
+			reporter.Warn("%s (%s)", s, s.Note())
 		}
 	}
+}
+
+func (pl *Plan) alignShadows(ctx context.Context, reporter *ui.Reporter) error {
+	if pl.opts.NoComposer || pl.p.Manifest.Composer.Disabled() {
+		return nil
+	}
+	bin, _ := pl.p.Manifest.Composer.Value("composer")
+	aligned, err := composer.Align(ctx, bin, pl.p.Root, pl.vendoredDirs(), nil)
+	if aligned {
+		reporter.Step("composer: aligned shadowed packages to core")
+	}
+	return err
+}
+
+func (pl *Plan) reportAlign(reporter *ui.Reporter) error {
+	for _, dir := range pl.vendoredDirs() {
+		pins, err := composer.PinArgs(pl.p.Root, dir)
+		if err != nil {
+			return err
+		}
+		if len(pins) == 0 {
+			continue
+		}
+		rel, rerr := filepath.Rel(pl.p.Root, dir)
+		if rerr != nil {
+			rel = dir
+		}
+		reporter.Info("would align %s: %s", filepath.ToSlash(rel), strings.Join(pins, " "))
+	}
+	return nil
+}
+
+func (pl *Plan) vendoredDirs() []string {
+	keys := make([]string, 0, len(pl.p.Lock.Packages))
+	for key, lp := range pl.p.Lock.Packages {
+		if composer.Mode(lp.Composer) == composer.ModeVendored {
+			keys = append(keys, key)
+		}
+	}
+	slices.Sort(keys)
+	dirs := make([]string, len(keys))
+	for i, key := range keys {
+		dirs[i] = pl.destPath(key)
+	}
+	return dirs
 }
 
 // one registry query per round
@@ -1417,7 +1462,10 @@ func (pl *Plan) composerPlan(done []*workItem) composer.Plan {
 }
 
 func (pl *Plan) finishMW(ctx context.Context, reporter *ui.Reporter, cplan composer.Plan, done []*workItem) error {
-	if pl.opts.DryRun || pl.opts.LockfileOnly {
+	if pl.opts.DryRun {
+		return pl.reportAlign(reporter)
+	}
+	if pl.opts.LockfileOnly {
 		return nil
 	}
 	path, f, ok, err := pl.localSettings()
@@ -1431,6 +1479,9 @@ func (pl *Plan) finishMW(ctx context.Context, reporter *ui.Reporter, cplan compo
 	}
 	pl.platformWarn(ctx, reporter, done)
 	if err := pl.runComposer(ctx, reporter, cplan); err != nil {
+		return err
+	}
+	if err := pl.alignShadows(ctx, reporter); err != nil {
 		return err
 	}
 	var keys []string

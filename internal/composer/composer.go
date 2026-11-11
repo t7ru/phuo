@@ -1,6 +1,7 @@
 package composer
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -135,6 +136,62 @@ func runPlan(ctx context.Context, root, bin string, p Plan, out io.Writer, needU
 		}
 	}
 	return nil
+}
+
+// asingle package often cannot move while another lock entry want an old major
+func Align(ctx context.Context, bin, root string, dirs []string, out io.Writer) (bool, error) {
+	if bin == "" {
+		bin = "composer"
+	}
+	type job struct {
+		dir  string
+		pins []string
+	}
+	var jobs []job
+	for _, dir := range dirs {
+		pins, err := PinArgs(root, dir)
+		if err != nil {
+			return false, err
+		}
+		if len(pins) > 0 {
+			jobs = append(jobs, job{dir, pins})
+		}
+	}
+	if len(jobs) == 0 {
+		return false, nil
+	}
+	if _, err := exec.LookPath(bin); err != nil {
+		cmds := make([]string, len(jobs))
+		for i, j := range jobs {
+			cmds[i] = bin + " require --no-interaction --update-no-dev -W " + strings.Join(j.pins, " ")
+		}
+		return false, fmt.Errorf("%s not found; run: %s", bin, strings.Join(cmds, "; "))
+	}
+	var errs []error
+	did := false
+	for _, j := range jobs {
+		rel, rerr := filepath.Rel(root, j.dir)
+		if rerr != nil {
+			rel = j.dir
+		}
+		rel = filepath.ToSlash(rel)
+		var buf bytes.Buffer
+		w := io.Writer(&buf)
+		if out != nil {
+			w = io.MultiWriter(out, &buf)
+		}
+		args := append([]string{"require", "--no-interaction", "--update-no-dev", "-W"}, j.pins...)
+		if err := runComposer(ctx, bin, j.dir, args, w); err != nil {
+			msg := strings.TrimSpace(buf.String())
+			if msg == "" {
+				msg = err.Error()
+			}
+			errs = append(errs, fmt.Errorf("%s: composer cannot match core (%s):\n%s", rel, strings.Join(j.pins, " "), msg))
+			continue
+		}
+		did = true
+	}
+	return did, errors.Join(errs...)
 }
 
 func globTouched(include, adds, removes []string) bool {
@@ -275,6 +332,15 @@ func writeJSON(path string, v any) error {
 func runComposer(ctx context.Context, bin, dir string, args []string, out io.Writer) error {
 	cmd := exec.CommandContext(ctx, bin, args...)
 	cmd.Dir = dir
+	// getenv returns the first duplicate
+	// thus, appending COMPOSER= would not win
+	env := make([]string, 0, len(os.Environ())+1)
+	for _, e := range os.Environ() {
+		if !strings.HasPrefix(e, "COMPOSER=") {
+			env = append(env, e)
+		}
+	}
+	cmd.Env = append(env, "COMPOSER=composer.json")
 	if out != nil {
 		cmd.Stdout = out
 		cmd.Stderr = out

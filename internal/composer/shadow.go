@@ -32,6 +32,35 @@ func (s Shadow) String() string {
 	return s.Name + ": " + strings.Join(parts, " ")
 }
 
+func (s Shadow) Note() string {
+	for _, c := range s.Copies {
+		if c.Where == "vendor" {
+			return "update realigns this to core"
+		}
+	}
+	return "load order decides which copy wins"
+}
+
+func PinArgs(root, dir string) ([]string, error) {
+	core, err := readInstalled(filepath.Join(root, "vendor", "composer", "installed.json"))
+	if err != nil {
+		return nil, err
+	}
+	have, err := readInstalled(filepath.Join(dir, "vendor", "composer", "installed.json"))
+	if err != nil {
+		return nil, err
+	}
+	var pins []string
+	for _, name := range slices.Sorted(maps.Keys(have)) {
+		ver, ok := core[name]
+		if !ok || compatVersion(ver) == compatVersion(have[name]) {
+			continue
+		}
+		pins = append(pins, name+":"+ver)
+	}
+	return pins, nil
+}
+
 func DetectShadows(root string, dirs map[string]string) ([]Shadow, error) {
 	type source struct {
 		where, path string
