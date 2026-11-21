@@ -14,7 +14,6 @@ import (
 
 	"github.com/charmbracelet/huh"
 
-	"github.com/t7ru/phuo/internal/archive"
 	"github.com/t7ru/phuo/internal/fetch"
 	"github.com/t7ru/phuo/internal/installer"
 	"github.com/t7ru/phuo/internal/project"
@@ -397,6 +396,9 @@ type DiffCmd struct {
 }
 
 func (c *DiffCmd) Run(ctx context.Context, cli *CLI) error {
+	if cli.Offline {
+		ctx = fetch.Offline(ctx)
+	}
 	p, _, err := loadProject(ctx, cli)
 	if err != nil {
 		return err
@@ -428,10 +430,7 @@ func (c *DiffCmd) Run(ctx context.Context, cli *CLI) error {
 	if cli.NoCache {
 		cacheDir = ""
 	}
-	if err := extractArchive(ctx, res.Archive, tmp, cacheDir); err != nil {
-		return err
-	}
-	pkgRoot, err := archive.PackageRoot(tmp)
+	pkgRoot, err := installer.MaterializeArchive(ctx, res, filepath.Join(tmp, "base"), cacheDir, "")
 	if err != nil {
 		return err
 	}

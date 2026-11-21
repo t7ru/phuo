@@ -14,6 +14,7 @@ import (
 
 	json "encoding/json/v2"
 
+	"github.com/t7ru/phuo/internal/archive"
 	"github.com/t7ru/phuo/internal/composer"
 	"github.com/t7ru/phuo/internal/fetch"
 	"github.com/t7ru/phuo/internal/localsettings"
@@ -79,6 +80,15 @@ func (c *DoctorCmd) Run(ctx context.Context, cli *CLI) error {
 			missing[key] = true
 		} else {
 			rep.Warn("%s: no install record; run phuo install", key)
+		}
+		if !missing[key] {
+			if err := archive.CheckSubmodules(dir); err != nil {
+				repair := "run phuo install"
+				if strings.HasPrefix(lp.Spec, "file:") {
+					repair = "initialize submodules in the source checkout"
+				}
+				problem("%s: %v; %s", key, err, repair)
+			}
 		}
 		man, _, err := manifest.Read(dir)
 		if err != nil {

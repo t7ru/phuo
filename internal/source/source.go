@@ -673,7 +673,31 @@ func GitHubRepo(u string) string {
 // ExtensionDistributor clone URLs are ".../r/.../Name.git"
 // gitiles is /r/plugins/gitiles/ without .git
 func gitiles(source string) string {
-	return strings.Replace(strings.TrimSuffix(strings.TrimSuffix(source, "/"), ".git"), "gerrit.wikimedia.org/r/", "gerrit.wikimedia.org/r/plugins/gitiles/", 1)
+	source = strings.TrimSuffix(strings.TrimSuffix(source, "/"), ".git")
+	if strings.Contains(source, "/r/plugins/gitiles/") {
+		return source
+	}
+	return strings.NewReplacer("gerrit.wikimedia.org/r/", "gerrit.wikimedia.org/r/plugins/gitiles/", "gerrit.wikimedia.org/g/", "gerrit.wikimedia.org/r/plugins/gitiles/").Replace(source)
+}
+
+func IsGitilesArchive(src, sha, archive string) bool {
+	if !IsFullSHA(sha) || !strings.Contains(src, "gerrit.wikimedia.org") {
+		return false
+	}
+	ref, ok := strings.CutPrefix(archive, gitiles(src)+"/+archive/")
+	ref, ok2 := strings.CutSuffix(ref, ".tar.gz")
+	return ok && ok2 && len(ref) >= 7 && strings.HasPrefix(strings.ToLower(sha), strings.ToLower(ref))
+}
+
+func FallbackArchive(src, sha, primary string) string {
+	if !IsFullSHA(sha) || IsGitilesArchive(src, sha, primary) {
+		return ""
+	}
+	fallback, _ := ArchiveAt(src, sha)
+	if fallback == primary {
+		return ""
+	}
+	return fallback
 }
 
 func ArchiveAt(source, sha string) (string, bool) {

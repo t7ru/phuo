@@ -6,10 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
-	"net/http"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -78,12 +75,12 @@ type Options struct {
 }
 
 type Plan struct {
-	Ops    []Op
-	p      *project.Project
-	add    []spec.Spec
-	remove []string
-	opts   Options
-	down   sync.Map
+	Ops      []Op
+	p        *project.Project
+	add      []spec.Spec
+	remove   []string
+	opts     Options
+	archives archiveMaterializer
 }
 
 type Summary struct {
@@ -101,6 +98,7 @@ type workItem struct {
 	integrity     string
 	integrityWarn bool
 	fallback      bool
+	filled        bool
 	hostWarn      string
 	fromSHA       string
 	pkgRoot       string
@@ -230,6 +228,9 @@ func (pl *Plan) mergedInclude(key string) []string {
 }
 
 func (pl *Plan) applyInstall(ctx context.Context, reporter *ui.Reporter) (Summary, error) {
+	if pl.opts.Offline {
+		ctx = fetch.Offline(ctx)
+	}
 	// .phuo-tmp only empties once every item has been swapped or cleaned up
 	defer os.Remove(filepath.Join(pl.parentDir("extensions"), ".phuo-tmp"))
 	defer os.Remove(filepath.Join(pl.parentDir("skins"), ".phuo-tmp"))
@@ -328,6 +329,9 @@ func (pl *Plan) applyInstall(ctx context.Context, reporter *ui.Reporter) (Summar
 				reporter.Warn("%s: snapshot tarball unavailable, rebuilt from source at %s", it.res.Name, shortSHA(it.res.SHA))
 			} else if it.integrityWarn {
 				reporter.Warn("%s: integrity mismatch (updating lock)", it.res.Name)
+			}
+			if it.filled {
+				reporter.Info("%s: restored missing submodules from Git archives", it.res.Name)
 			}
 			if it.res.Hint != "" {
 				hints = append(hints, it.res.Hint)
@@ -538,7 +542,8 @@ func (pl *Plan) applyInstall(ctx context.Context, reporter *ui.Reporter) (Summar
 		pkg := project.Package{
 			Spec: lockSpec, Ref: it.res.Ref, SHA: it.res.SHA, Date: date,
 			Source: it.res.Source, Archive: it.res.Archive, Integrity: it.integrity,
-			Version: it.man.Version, Policy: it.res.Policy,
+			Checkout: it.res.Clone != "",
+			Version:  it.man.Version, Policy: it.res.Policy,
 			Dependencies: depMap[it.key],
 		}
 		pkg.Requires = project.Requires{
@@ -794,8 +799,14 @@ func (pl *Plan) prepareItem(ctx context.Context, it *workItem, resolver source.R
 		it.key = guessKey(it.spec)
 	}
 	lp, haveLock := pl.p.Lock.Packages[it.key]
+	dest := pl.destPath(it.key)
+	wantGit := pl.opts.Git && it.spec.Kind != spec.Archive && it.spec.Kind != spec.Local
+	lockedGit := lp.Checkout
 	if haveLock {
 		it.fromSHA = lp.SHA
+		if !lockedGit && lp.Archive == "" && lp.Source != "" && source.IsFullSHA(lp.SHA) {
+			lockedGit = it.spec.Kind == spec.Git || it.spec.Kind == spec.GitHub || it.spec.Kind == spec.GitLab || hasCheckout(dest)
+		}
 	}
 	// revert replays the lock instead of resolving
 	// the snapshot's sha is the whole point, so a moved ref must not win
@@ -804,33 +815,35 @@ func (pl *Plan) prepareItem(ctx context.Context, it *workItem, resolver source.R
 		if lp.Archive == "" && (lp.Source == "" || lp.SHA == "") {
 			return fmt.Errorf("%s: nothing in the lock to revert to", it.key)
 		}
-		dest := pl.destPath(it.key)
 		// lock is already the snapshot, hence the installed stamp is the only
 		// record of what this revert is moving away from
 		if s, ok := project.ReadStamp(dest); ok {
 			it.fromSHA = s.SHA
 		}
-		if stampMatch(dest, lp) {
+		if stampMatch(dest, lp) && (!lockedGit || hasCheckout(dest)) && (lp.Archive == "" || !hasCheckout(dest)) {
 			it.keep = true
 			return nil
 		}
 		return pl.fetchFromLock(ctx, it, lp, cacheDir)
 	}
 	if haveLock && !pl.opts.Update && !pl.opts.Force {
-		dest := pl.destPath(it.key)
-		if it.lockSpec == lp.Spec && stampMatch(dest, lp) {
+		keepMode := !lockedGit && !wantGit || hasCheckout(dest) && !(wantGit && pl.opts.Full)
+		if it.lockSpec == lp.Spec && keepMode && stampMatch(dest, lp) {
 			it.keep = true
 			return nil
 		}
-		if (it.fromLock || !it.direct) && lp.Archive != "" {
-			return pl.fetchFromLock(ctx, it, lp, cacheDir)
-		}
-		if it.direct && lp.Archive != "" && lp.Spec == it.lockSpec {
-			it.fromLock = true
-			return pl.fetchFromLock(ctx, it, lp, cacheDir)
+		if it.fromLock || !it.direct || it.lockSpec == lp.Spec {
+			if wantGit && lp.Source != "" && source.IsFullSHA(lp.SHA) {
+				lp.Archive, lp.Integrity = "", ""
+				return pl.fetchFromLock(ctx, it, lp, cacheDir)
+			}
+			if lockedGit || (!wantGit && lp.Archive != "") {
+				return pl.fetchFromLock(ctx, it, lp, cacheDir)
+			}
 		}
 	}
 
+	ropts.Git = wantGit || (lockedGit && (pl.opts.Update || it.lockSpec == lp.Spec))
 	res, err := resolver.Resolve(ctx, it.spec, ropts)
 	fromOffDist := false
 	if off, ok := errors.AsType[*source.OffDist](err); ok {
@@ -875,13 +888,15 @@ func (pl *Plan) prepareItem(ctx context.Context, it *workItem, resolver source.R
 		it.res.Policy = lp.Policy
 	}
 
-	if pl.opts.Update && haveLock && lp.SHA != "" && lp.SHA == res.SHA && !pl.opts.Force && it.lockSpec == lp.Spec {
+	if pl.opts.Update && haveLock && lp.SHA != "" && lp.SHA == res.SHA && !pl.opts.Force && it.lockSpec == lp.Spec &&
+		stampMatch(pl.destPath(it.key), lp) {
 		it.keep = true
 		return nil
 	}
 	// translation-only tips are not an update unless --l10n
 	// a failed or missing log stays an update
-	if pl.opts.Update && !pl.opts.L10n && haveLock && lp.SHA != "" && lp.SHA != res.SHA && source.CheapLog(res) {
+	if pl.opts.Update && !pl.opts.L10n && haveLock && lp.SHA != "" && lp.SHA != res.SHA && source.CheapLog(res) &&
+		stampMatch(pl.destPath(it.key), lp) {
 		if logger, ok := resolver.(source.ChangeLogger); ok {
 			commits, err := logger.Log(ctx, res, lp.SHA, res.SHA)
 			if err == nil && source.L10nOnly(commits) {
@@ -898,7 +913,6 @@ func (pl *Plan) prepareItem(ctx context.Context, it *workItem, resolver source.R
 	if res.Clone != "" && res.Archive == "" {
 		parent := pl.parentDir(res.Type)
 		it.tmpDir = filepath.Join(parent, ".phuo-tmp", res.Name)
-		os.RemoveAll(it.tmpDir)
 		if err := gitClone(ctx, res, it.tmpDir, pl.opts.Full); err != nil {
 			return err
 		}
@@ -909,7 +923,7 @@ func (pl *Plan) prepareItem(ctx context.Context, it *workItem, resolver source.R
 	if res.Archive == "" {
 		return fmt.Errorf("%s: no archive URL", res.Name)
 	}
-	return pl.fetchArchive(ctx, it, cacheDir)
+	return pl.fetchArchive(ctx, it, cacheDir, "")
 }
 
 // no-archive lock entry (`github:`/`gitlab:`) always go https
@@ -951,7 +965,6 @@ func (pl *Plan) fetchFromLock(ctx context.Context, it *workItem, lp project.Pack
 		it.res.Source, it.res.Clone = lockClone(lp)
 		it.res.Ref = lp.SHA
 		it.tmpDir = filepath.Join(pl.parentDir(typ), ".phuo-tmp", name)
-		os.RemoveAll(it.tmpDir)
 		if err := gitClone(ctx, it.res, it.tmpDir, pl.opts.Full); err != nil {
 			return err
 		}
@@ -961,155 +974,28 @@ func (pl *Plan) fetchFromLock(ctx context.Context, it *workItem, lp project.Pack
 		it.man = man
 		return err
 	}
-	if err := pl.fetchArchive(ctx, it, cacheDir); err != nil {
-		return err
-	}
-	if lp.Integrity != "" && it.integrity != lp.Integrity && !it.fallback {
-		if !pl.opts.Force {
-			os.RemoveAll(it.tmpDir)
-			return fmt.Errorf("%s: integrity mismatch", name)
-		}
-		it.integrityWarn = true
-	}
-	return nil
-}
-
-type transfer struct{ err error }
-
-func (e *transfer) Error() string { return e.err.Error() }
-func (e *transfer) Unwrap() error { return e.err }
-
-func (pl *Plan) strike(rawURL string, err error) (host string, first bool) {
-	var he *fetch.HTTPError
-	if errors.As(err, &he) && he.Status != http.StatusTooManyRequests && he.Status < 500 {
-		return "", false
-	}
-	u, uerr := url.Parse(rawURL)
-	if uerr != nil {
-		return "", false
-	}
-	_, dup := pl.down.LoadOrStore(u.Host, struct{}{})
-	return u.Host, !dup
-}
-
-func (pl *Plan) hostDown(rawURL string) bool {
-	u, err := url.Parse(rawURL)
-	if err != nil {
-		return false
-	}
-	_, ok := pl.down.Load(u.Host)
-	return ok
-}
-
-func (pl *Plan) fetchArchive(ctx context.Context, it *workItem, cacheDir string) error {
-	parent := pl.parentDir(it.res.Type)
-	if it.res.Type == "" {
-		parent = pl.parentDir("extensions")
-	}
-	it.tmpDir = filepath.Join(parent, ".phuo-tmp", it.res.Name)
-	os.RemoveAll(it.tmpDir)
-
-	src := ""
-	if it.res.SHA != "" && it.res.Source != "" {
-		if fb, ok := source.ArchiveAt(it.res.Source, it.res.SHA); ok && fb != it.res.Archive {
-			src = fb
-		}
-	}
-	if src != "" && pl.hostDown(it.res.Archive) {
-		if _, ok := fetch.Cached(cacheDir, it.res.Archive); !ok {
-			it.res.Archive, it.fallback, src = src, true, ""
-		}
-	}
-
-	// extdist lists branch tips before their tarballs exist
-	// therefore a snapshot URL can 404
-	integrity, err := fetchInto(ctx, it.res, it.tmpDir, cacheDir)
-	if err != nil && src != "" && ctx.Err() == nil {
-		if host, first := pl.strike(it.res.Archive, err); first {
-			it.hostWarn = fmt.Sprintf("%s is unreachable; phuo will try git archives", host)
-		}
-		os.RemoveAll(it.tmpDir)
-		it.res.Archive, it.fallback = src, true
-		integrity, err = fetchInto(ctx, it.res, it.tmpDir, cacheDir)
-	}
-	if err != nil {
-		os.RemoveAll(it.tmpDir)
-		return err
-	}
-	it.integrity = integrity
-	pkgRoot, err := archive.PackageRoot(it.tmpDir)
-	if err != nil {
-		os.RemoveAll(it.tmpDir)
-		return fmt.Errorf("%s: %w", it.res.Name, err)
-	}
-	it.pkgRoot = pkgRoot
-	man, kind, err := manifest.Read(pkgRoot)
-	if err != nil {
-		os.RemoveAll(it.tmpDir)
-		return err
-	}
-	it.man = man
-	if kind != "" && kind != it.res.Type {
-		it.res.Type = kind
-		it.key = kind + "/" + it.res.Name
-	}
-	return nil
-}
-
-func fetchInto(ctx context.Context, res source.Resolved, tmp, cacheDir string) (string, error) {
-	if err := os.MkdirAll(tmp, 0o755); err != nil {
-		return "", err
-	}
-	root, err := os.OpenRoot(tmp)
-	if err != nil {
-		return "", err
-	}
-	defer root.Close()
-
-	if strings.HasSuffix(strings.ToLower(res.Archive), ".zip") {
-		zf := filepath.Join(tmp, ".archive.zip")
-		f, err := os.Create(zf)
-		if err != nil {
-			return "", err
-		}
-		integrity, err := fetch.Download(ctx, res.Archive, cacheDir, f)
-		f.Close()
-		if err != nil {
-			os.Remove(zf)
-			return "", &transfer{fmt.Errorf("%s: %w", res.Name, err)}
-		}
-		err = archive.ExtractZip(zf, root)
-		os.Remove(zf)
-		if err != nil {
-			return "", fmt.Errorf("%s: %w", res.Name, err)
-		}
-		return integrity, nil
-	}
-
-	pr, pw := io.Pipe()
-	xerr := make(chan error, 1)
-	go func() {
-		err := archive.ExtractTarGz(pr, root)
-		pr.CloseWithError(err)
-		xerr <- err
-	}()
-	integrity, dlErr := fetch.Download(ctx, res.Archive, cacheDir, pw)
-	pw.CloseWithError(dlErr)
-	if e := <-xerr; e != nil && dlErr == nil {
-		return "", fmt.Errorf("%s: %w", res.Name, e)
-	}
-	if dlErr != nil {
-		return "", &transfer{fmt.Errorf("%s: %w", res.Name, dlErr)}
-	}
-	return integrity, nil
+	return pl.fetchArchive(ctx, it, cacheDir, lp.Integrity)
 }
 
 func gitClone(ctx context.Context, res source.Resolved, dest string, full bool) error {
+	if fetch.IsOffline(ctx) {
+		return fmt.Errorf("offline: cannot clone %s", res.Name)
+	}
 	if _, err := exec.LookPath("git"); err != nil {
 		return fmt.Errorf("git is required to clone %s", res.Name)
 	}
-	os.RemoveAll(dest)
+	if err := os.RemoveAll(dest); err != nil {
+		return err
+	}
 	env := append(os.Environ(), fetch.GitEnv(res.Clone)...)
+	git := func(dir string, args ...string) error {
+		cmd := exec.CommandContext(ctx, "git", args...)
+		cmd.Dir, cmd.Env = dir, env
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("git %s %s: %w\n%s", args[0], res.Name, err, out)
+		}
+		return nil
+	}
 	// `--branch` is names only
 	// an exact sha needs fetch + checkout
 	ref := res.Ref
@@ -1124,37 +1010,41 @@ func gitClone(ctx context.Context, res source.Resolved, dest string, full bool) 
 			{"init", "--quiet"},
 			{"remote", "add", "origin", res.Clone},
 		}
-		if full {
-			steps = append(steps, []string{"fetch", "--quiet", "origin"})
-		} else {
-			steps = append(steps, []string{"fetch", "--quiet", "--depth", "1", "origin", ref})
+		args := []string{"fetch", "--quiet"}
+		if !full {
+			args = append(args, "--depth", "1")
 		}
-		steps = append(steps, []string{"checkout", "--quiet", ref})
+		steps = append(steps, append(args, "origin", ref), []string{"checkout", "--quiet", ref})
 		for _, args := range steps {
-			cmd := exec.CommandContext(ctx, "git", args...)
-			cmd.Dir = dest
-			cmd.Env = env
-			if out, err := cmd.CombinedOutput(); err != nil {
-				os.RemoveAll(dest)
-				return fmt.Errorf("git %s %s: %w\n%s", args[0], res.Name, err, out)
+			if err := git(dest, args...); err != nil {
+				return err
 			}
 		}
+	} else {
+		args := []string{"clone"}
+		if !full {
+			args = append(args, "--depth", "1", "--single-branch")
+		}
+		if ref != "" && ref != "HEAD" {
+			args = append(args, "--branch", ref)
+		}
+		if err := git("", append(args, "--", res.Clone, dest)...); err != nil {
+			return err
+		}
+	}
+	if _, err := os.Lstat(filepath.Join(dest, ".gitmodules")); errors.Is(err, fs.ErrNotExist) {
 		return nil
+	} else if err != nil {
+		return err
 	}
-	args := []string{"clone"}
+	args := []string{"submodule", "update", "--init", "--recursive", "--checkout"}
 	if !full {
-		args = append(args, "--depth", "1", "--single-branch")
+		args = append(args, "--depth", "1")
 	}
-	if ref != "" {
-		args = append(args, "--branch", ref)
+	if err := git(dest, args...); err != nil {
+		return err
 	}
-	args = append(args, res.Clone, dest)
-	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Env = env
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git clone %s: %w\n%s", res.Name, err, out)
-	}
-	return nil
+	return archive.CheckSubmodules(dest)
 }
 
 func linkLocal(local, dest string, force bool) error {
@@ -1205,7 +1095,16 @@ func samePath(a, b string) (bool, error) {
 
 func stampMatch(dest string, lp project.Package) bool {
 	s, ok := project.ReadStamp(dest)
-	return ok && s.SHA == lp.SHA && s.Ref == lp.Ref
+	if !ok || s.SHA != lp.SHA || s.Ref != lp.Ref {
+		return false
+	}
+	info, err := os.Lstat(dest)
+	return err == nil && (info.Mode()&os.ModeSymlink != 0 || archive.CheckSubmodules(dest) == nil)
+}
+
+func hasCheckout(dir string) bool {
+	info, err := os.Lstat(filepath.Join(dir, ".git"))
+	return err == nil && info.IsDir()
 }
 
 func (pl *Plan) checkFrozen() error {
@@ -1389,6 +1288,9 @@ func (pl *Plan) applyPkgPatch(ctx context.Context, it *workItem, reporter *ui.Re
 			return nil
 		}
 		return fmt.Errorf("patch %s does not apply to %s@%s: %w", rel, it.res.Name, shortSHA(it.res.SHA), err)
+	}
+	if err := archive.CheckSubmodules(it.pkgRoot); err != nil {
+		return fmt.Errorf("patch %s leaves %s@%s incomplete: %w", rel, it.res.Name, shortSHA(it.res.SHA), err)
 	}
 	return nil
 }

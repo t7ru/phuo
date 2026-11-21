@@ -188,7 +188,7 @@ func adoptDir(dir, rel string) (pkg project.Package, manVal string, ok bool, err
 			// an ssh origin would make the lock need the op's keys
 			src = "https://github.com/" + ownerRepo
 		}
-		pkg = project.Package{Spec: manVal, Ref: ref, SHA: sha, Source: src}
+		pkg = project.Package{Spec: manVal, Ref: ref, SHA: sha, Source: src, Checkout: true}
 		if err := project.WriteStamp(dir, project.Stamp{SHA: sha, Ref: ref, Spec: manVal}); err != nil {
 			return pkg, "", false, err
 		}

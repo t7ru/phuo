@@ -13,6 +13,8 @@ import (
 	"strings"
 
 	"github.com/t7ru/phuo/internal/archive"
+	"github.com/t7ru/phuo/internal/fetch"
+	"github.com/t7ru/phuo/internal/installer"
 	"github.com/t7ru/phuo/internal/patch"
 	"github.com/t7ru/phuo/internal/project"
 	"github.com/t7ru/phuo/internal/source"
@@ -21,6 +23,9 @@ import (
 )
 
 func (c *PatchCmd) Run(ctx context.Context, cli *CLI) error {
+	if cli.Offline {
+		ctx = fetch.Offline(ctx)
+	}
 	if c.Name == "" {
 		return userErr("package name required")
 	}
@@ -75,7 +80,7 @@ func patchBegin(ctx context.Context, cli *CLI, p *project.Project, key string, l
 		return err
 	}
 	defer os.RemoveAll(tmp)
-	if err := downloadLockArchive(ctx, lp, tmp, cacheDir); err != nil {
+	if _, err := downloadLockArchive(ctx, key, lp, tmp, cacheDir); err != nil {
 		return err
 	}
 	rel := strings.TrimPrefix(dir, p.Root+string(filepath.Separator))
@@ -106,12 +111,12 @@ func patchCommit(ctx context.Context, cli *CLI, p *project.Project, key string, 
 		return err
 	}
 	defer os.RemoveAll(tmp)
-	if err := downloadLockArchive(ctx, lp, tmp, cacheDir); err != nil {
-		return err
-	}
-	pristine, err := archive.PackageRoot(tmp)
+	pristine, err := downloadLockArchive(ctx, key, lp, filepath.Join(tmp, "base"), cacheDir)
 	if err != nil {
 		return err
+	}
+	if err := archive.CheckSubmodules(dir); err != nil {
+		return fmt.Errorf("%s: %w; run phuo install", key, err)
 	}
 
 	leftCopy := filepath.Join(tmp, ".left")
@@ -199,22 +204,7 @@ func patchRemove(p *project.Project, key string, lp project.Package, rep *ui.Rep
 	return nil
 }
 
-func downloadLockArchive(ctx context.Context, lp project.Package, tmp, cacheDir string) error {
-	url := lp.Archive
-	err := extractArchive(ctx, url, tmp, cacheDir)
-	if err == nil {
-		return nil
-	}
-	if !strings.Contains(err.Error(), "HTTP 404") || lp.SHA == "" || lp.Source == "" {
-		return err
-	}
-	fb, ok := source.ArchiveAt(lp.Source, lp.SHA)
-	if !ok {
-		return err
-	}
-	os.RemoveAll(tmp)
-	if err := os.MkdirAll(tmp, 0o755); err != nil {
-		return err
-	}
-	return extractArchive(ctx, fb, tmp, cacheDir)
+func downloadLockArchive(ctx context.Context, key string, lp project.Package, tmp, cacheDir string) (string, error) {
+	res := source.Resolved{Name: keyName(key), Source: lp.Source, SHA: lp.SHA, Archive: lp.Archive}
+	return installer.MaterializeArchive(ctx, res, tmp, cacheDir, lp.Integrity)
 }

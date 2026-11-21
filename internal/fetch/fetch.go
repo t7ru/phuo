@@ -26,7 +26,18 @@ import (
 var (
 	clientOnce sync.Once
 	shared     *http.Client
+	ErrOffline = errors.New("offline: cache miss")
 )
+
+type offlineKey struct{}
+
+func Offline(ctx context.Context) context.Context {
+	return context.WithValue(ctx, offlineKey{}, true)
+}
+
+func IsOffline(ctx context.Context) bool {
+	return ctx.Value(offlineKey{}) == true
+}
 
 var Transport http.RoundTripper = &http.Transport{
 	Proxy:                 http.ProxyFromEnvironment,
@@ -54,6 +65,9 @@ const (
 type retryTransport struct{ base http.RoundTripper }
 
 func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if IsOffline(req.Context()) {
+		return nil, ErrOffline
+	}
 	if req.Body != nil && req.GetBody == nil {
 		return t.base.RoundTrip(req)
 	}
@@ -160,7 +174,7 @@ func GitEnv(rawURL string) []string {
 	}
 	return []string{
 		"GIT_CONFIG_COUNT=1",
-		"GIT_CONFIG_KEY_0=http.extraHeader",
+		"GIT_CONFIG_KEY_0=http." + u.Scheme + "://" + u.Host + "/.extraHeader",
 		"GIT_CONFIG_VALUE_0=Authorization: " + h,
 	}
 }
@@ -182,9 +196,12 @@ func (t *uaTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 // empty cacheDir skips cache reads and writes (--no-cache, tests)
 func Download(ctx context.Context, url, cacheDir string, w io.Writer) (string, error) {
 	if cacheDir != "" {
-		if integrity, ok := serveCached(cacheDir, url, w); ok {
-			return integrity, nil
+		if integrity, ok, err := serveCached(cacheDir, url, w); ok {
+			return integrity, err
 		}
+	}
+	if IsOffline(ctx) {
+		return "", fmt.Errorf("%s: %w", url, ErrOffline)
 	}
 
 	h := sha256.New()
@@ -196,12 +213,11 @@ func Download(ctx context.Context, url, cacheDir string, w io.Writer) (string, e
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return "", err
 		}
-		partPath = filepath.Join(dir, urlKey(url)+".part")
-		f, err := os.Create(partPath)
+		f, err := os.CreateTemp(dir, "*.part")
 		if err != nil {
 			return "", err
 		}
-		part = f
+		part, partPath = f, f.Name()
 		mw = io.MultiWriter(part, h, w)
 	} else {
 		mw = io.MultiWriter(h, w)
@@ -236,14 +252,14 @@ func Download(ctx context.Context, url, cacheDir string, w io.Writer) (string, e
 			res.Body.Close()
 			return "", failDownload(part, partPath, &HTTPError{URL: url, Status: res.StatusCode})
 		}
-		n, err := copyBody(mw, res.Body)
+		sink := downloadSink{Writer: mw}
+		n, err := copyBody(&sink, res.Body)
 		res.Body.Close()
 		received += n
 		if err == nil {
 			break
 		}
-		// the sink died but not the network
-		if n == 0 || attempt >= retryAttempts-1 || ctx.Err() != nil {
+		if sink.err != nil || n == 0 || attempt >= retryAttempts-1 || ctx.Err() != nil {
 			return "", failDownload(part, partPath, err)
 		}
 		if !sleepCtx(ctx, retryDelay(res, attempt)) {
@@ -269,11 +285,34 @@ func Download(ctx context.Context, url, cacheDir string, w io.Writer) (string, e
 		if err := os.MkdirAll(idxDir, 0o755); err != nil {
 			return "", err
 		}
-		if err := os.WriteFile(filepath.Join(idxDir, urlKey(url)), []byte(integrity+"\n"), 0o644); err != nil {
+		idx, err := os.CreateTemp(idxDir, "*.part")
+		if err != nil {
+			return "", err
+		}
+		defer os.Remove(idx.Name())
+		_, err = io.WriteString(idx, integrity+"\n")
+		if err := errors.Join(err, idx.Close()); err != nil {
+			return "", err
+		}
+		if err := os.Rename(idx.Name(), filepath.Join(idxDir, urlKey(url))); err != nil {
 			return "", err
 		}
 	}
 	return integrity, nil
+}
+
+type downloadSink struct {
+	io.Writer
+	err error
+}
+
+func (w *downloadSink) Write(p []byte) (int, error) {
+	n, err := w.Writer.Write(p)
+	if n != len(p) && err == nil {
+		err = io.ErrShortWrite
+	}
+	w.err = err
+	return n, err
 }
 
 func failDownload(part *os.File, partPath string, err error) error {
@@ -332,20 +371,18 @@ func Uncache(cacheDir, url string) error {
 	return err
 }
 
-func serveCached(cacheDir, url string, w io.Writer) (string, bool) {
+func serveCached(cacheDir, url string, w io.Writer) (string, bool, error) {
 	blob, integrity, ok := cacheEntry(cacheDir, url)
 	if !ok {
-		return "", false
+		return "", false, nil
 	}
 	f, err := os.Open(blob)
 	if err != nil {
-		return "", false
+		return "", false, nil
 	}
 	defer f.Close()
-	if _, err := io.Copy(w, f); err != nil {
-		return "", false
-	}
-	return integrity, true
+	_, err = io.Copy(w, f)
+	return integrity, true, err
 }
 
 func cacheEntry(cacheDir, url string) (blob, integrity string, ok bool) {

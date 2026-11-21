@@ -13,7 +13,15 @@ import (
 	"strings"
 )
 
-func ExtractTarGz(r io.Reader, root *os.Root) (err error) {
+func ExtractTarGz(r io.Reader, root *os.Root) error {
+	return extractTarGz(r, root, false)
+}
+
+func ExtractWrappedTarGz(r io.Reader, root *os.Root) error {
+	return extractTarGz(r, root, true)
+}
+
+func extractTarGz(r io.Reader, root *os.Root, wrapped bool) (err error) {
 	gz, err := gzip.NewReader(r)
 	if err != nil {
 		return err
@@ -25,10 +33,12 @@ func ExtractTarGz(r io.Reader, root *os.Root) (err error) {
 	}()
 	x := newExtractor(root)
 	tr := tar.NewReader(gz)
+	wrapper := ""
 	for {
 		h, err := tr.Next()
 		if err == io.EOF {
-			return nil
+			_, err = io.Copy(io.Discard, gz)
+			return err
 		}
 		if err != nil {
 			return err
@@ -39,6 +49,19 @@ func ExtractTarGz(r io.Reader, root *os.Root) (err error) {
 		}
 		if skip {
 			continue
+		}
+		if wrapped {
+			first, rest, _ := strings.Cut(name, "/")
+			if wrapper == "" {
+				wrapper = first
+			}
+			if first != wrapper || (rest == "" && h.Typeflag != tar.TypeDir) {
+				return errors.New("archive has no single top-level directory")
+			}
+			if rest == "" {
+				continue
+			}
+			name = rest
 		}
 		switch h.Typeflag {
 		case tar.TypeDir:

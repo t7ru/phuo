@@ -23,7 +23,6 @@ import (
 
 	json "encoding/json/v2"
 
-	"github.com/t7ru/phuo/internal/archive"
 	"github.com/t7ru/phuo/internal/fetch"
 	"github.com/t7ru/phuo/internal/localsettings"
 	"github.com/t7ru/phuo/internal/manifest"
@@ -1249,32 +1248,8 @@ func formatSize(n int64) string {
 	}
 }
 
-func extractArchive(ctx context.Context, url, tmp, cacheDir string) error {
-	if err := os.MkdirAll(tmp, 0o755); err != nil {
-		return err
-	}
-	root, err := os.OpenRoot(tmp)
-	if err != nil {
-		return err
-	}
-	defer root.Close()
-	pr, pw := io.Pipe()
-	xerr := make(chan error, 1)
-	go func() {
-		err := archive.ExtractTarGz(pr, root)
-		pr.CloseWithError(err)
-		xerr <- err
-	}()
-	_, err = fetch.Download(ctx, url, cacheDir, pw)
-	pw.CloseWithError(err)
-	if e := <-xerr; e != nil {
-		err = e
-	}
-	return err
-}
-
 var diffExclude = map[string]bool{
-	"vendor": true, ".phuo.json": true, "gitinfo.json": true, "version": true, "i18n": true,
+	"vendor": true, ".git": true, ".phuo.json": true, "gitinfo.json": true, "version": true, "i18n": true,
 }
 
 func copyTreeFiltered(src, dst string, all bool) error {

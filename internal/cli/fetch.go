@@ -7,10 +7,14 @@ import (
 	"maps"
 	"os"
 	"slices"
+	"strings"
 	"sync/atomic"
 
+	"github.com/t7ru/phuo/internal/archive"
 	"github.com/t7ru/phuo/internal/fetch"
+	"github.com/t7ru/phuo/internal/installer"
 	"github.com/t7ru/phuo/internal/project"
+	"github.com/t7ru/phuo/internal/source"
 	"github.com/t7ru/phuo/internal/ui"
 	"golang.org/x/sync/errgroup"
 )
@@ -36,7 +40,9 @@ func (c *FetchCmd) Run(ctx context.Context, cli *CLI) error {
 	})
 
 	type item struct {
-		key, url, want string
+		res                      source.Resolved
+		fallback, integrity, raw string
+		materialize, cached      bool
 	}
 	seen := make(map[string]bool, len(lock.Packages))
 	items := make([]item, 0, len(lock.Packages))
@@ -51,7 +57,16 @@ func (c *FetchCmd) Run(ctx context.Context, cli *CLI) error {
 			continue
 		}
 		seen[lp.Archive] = true
-		items = append(items, item{key: key, url: lp.Archive, want: lp.Integrity})
+		res := source.Resolved{Name: key, Source: lp.Source, SHA: lp.SHA, Archive: lp.Archive}
+		it := item{res: res, integrity: lp.Integrity, raw: lp.Integrity, fallback: source.FallbackArchive(lp.Source, lp.SHA, lp.Archive)}
+		hosted, _ := source.ArchiveAt(lp.Source, lp.SHA)
+		gitiles := source.IsGitilesArchive(lp.Source, lp.SHA, lp.Archive)
+		tree := strings.HasPrefix(lp.Integrity, archive.TreeIntegrityPrefix)
+		it.materialize = tree || gitiles || hosted == lp.Archive
+		if tree || gitiles {
+			it.raw = ""
+		}
+		items = append(items, it)
 	}
 	if skipped > 0 {
 		rep.Info("%d package(s) have no archive (git or local)", skipped)
@@ -62,46 +77,83 @@ func (c *FetchCmd) Run(ctx context.Context, cli *CLI) error {
 	}
 
 	cached := 0
+	missing := 0
 	todo := items[:0]
 	for _, it := range items {
-		got, ok := fetch.Cached(cacheDir, it.url)
-		if ok && (it.want == "" || got == it.want) {
+		got, ok := fetch.Cached(cacheDir, it.res.Archive)
+		it.cached = ok && (it.raw == "" || got == it.raw)
+		if it.cached {
 			cached++
+			if it.materialize {
+				todo = append(todo, it)
+			}
 			continue
 		}
 		if ok {
 			// a mismatched entry would poison installs
-			if err := fetch.Uncache(cacheDir, it.url); err != nil {
+			if err := fetch.Uncache(cacheDir, it.res.Archive); err != nil {
 				return err
+			}
+		}
+		if cli.Offline {
+			if _, ok := fetch.Cached(cacheDir, it.fallback); it.fallback != "" && ok {
+				it.res.Archive = it.fallback
+				it.integrity, it.raw = "", ""
+				it.cached, it.materialize = true, true
+				cached++
+			} else {
+				missing++
 			}
 		}
 		todo = append(todo, it)
 	}
-	if cli.Offline && len(todo) > 0 {
-		return userErr(fmt.Sprintf("offline: %d archive(s) not cached", len(todo)))
+	if missing > 0 {
+		return userErr(fmt.Sprintf("offline: %d archive(s) not cached", missing))
+	}
+	if cli.Offline {
+		ctx = fetch.Offline(ctx)
 	}
 	if len(todo) == 0 {
 		rep.Info("%d archive(s) already cached", cached)
 		return nil
 	}
 
-	sizes := make([]int64, len(todo))
 	var done atomic.Int64
+	var total atomic.Int64
 	rep.Progress("fetching %d archives...", len(todo))
 	defer rep.ClearProgress()
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(max(cli.Jobs, 1))
-	for i, it := range todo {
+	for _, it := range todo {
 		g.Go(func() error {
-			var cw countWriter
-			got, err := fetch.Download(gctx, it.url, cacheDir, &cw)
-			if err != nil {
-				return err
+			if !it.cached {
+				var cw countWriter
+				got, err := fetch.Download(gctx, it.res.Archive, cacheDir, &cw)
+				if err != nil && it.fallback != "" && gctx.Err() == nil {
+					it.res.Archive = it.fallback
+					it.integrity, it.raw = "", ""
+					it.materialize = true
+					cw.n = 0
+					got, err = fetch.Download(gctx, it.res.Archive, cacheDir, &cw)
+				}
+				if err != nil {
+					return err
+				}
+				if it.raw != "" && got != it.raw {
+					return errors.Join(fmt.Errorf("%s: integrity mismatch", it.res.Name), fetch.Uncache(cacheDir, it.res.Archive))
+				}
+				total.Add(cw.n)
 			}
-			if it.want != "" && got != it.want {
-				return errors.Join(fmt.Errorf("%s: integrity mismatch", it.key), fetch.Uncache(cacheDir, it.url))
+			if it.materialize {
+				tmp, err := os.MkdirTemp("", "phuo-fetch-*")
+				if err != nil {
+					return err
+				}
+				defer os.RemoveAll(tmp)
+				if _, err := installer.MaterializeArchive(gctx, it.res, tmp, cacheDir, it.integrity); err != nil {
+					return err
+				}
 			}
-			sizes[i] = cw.n
 			rep.Progress("fetched %d/%d archives...", done.Add(1), len(todo))
 			return nil
 		})
@@ -109,11 +161,11 @@ func (c *FetchCmd) Run(ctx context.Context, cli *CLI) error {
 	if err := g.Wait(); err != nil {
 		return err
 	}
-	var total int64
-	for _, n := range sizes {
-		total += n
+	if fetched := len(items) - cached; fetched > 0 {
+		rep.Info("%d archive(s) fetched (%s), %d already cached", fetched, formatSize(total.Load()), cached)
+	} else {
+		rep.Info("%d archive(s) already cached", cached)
 	}
-	rep.Info("%d archive(s) fetched (%s), %d already cached", len(todo), formatSize(total), cached)
 	return nil
 }
 

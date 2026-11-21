@@ -6,6 +6,7 @@ require (
 	github.com/alecthomas/kong v1.16.1
 	github.com/charmbracelet/huh v1.0.0
 	github.com/charmbracelet/lipgloss v1.1.0
+	github.com/go-git/gcfg/v2 v2.0.3
 	github.com/posener/complete v1.2.3
 	github.com/sahilm/fuzzy v0.1.3
 	github.com/willabides/kongplete v0.4.0

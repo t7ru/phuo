@@ -152,6 +152,7 @@ type Package struct {
 	Date         string   `json:"date,omitzero"`
 	Source       string   `json:"source,omitzero"`
 	Archive      string   `json:"archive,omitzero"`
+	Checkout     bool     `json:"checkout,omitzero"`
 	Integrity    string   `json:"integrity,omitzero"`
 	Version      string   `json:"version,omitzero"`
 	Requires     Requires `json:"requires,omitzero"`
